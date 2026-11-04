@@ -19,6 +19,9 @@ process.env.SHELL = "/bin/sh";
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const { createWorker } = await import("../worker/worker.ts");
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 /** Put a ps in front of the real one that answers the question the way a gone process does. */
 function psSaysGone() {
   writeFileSync(join(bin, "ps"), `#!/bin/sh\nexit 1\n`, { mode: 0o755 });

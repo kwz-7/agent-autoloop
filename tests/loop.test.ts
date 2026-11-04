@@ -24,6 +24,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const home = mkdtempSync(join(tmpdir(), "agent-autoloop-loop-"));
 const bin = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 // `init` turns on the desktop channel: these stand in for the commands that would really show something.

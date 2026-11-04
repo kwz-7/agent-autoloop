@@ -22,9 +22,10 @@ import type { Rejected } from "../protocol/validate.ts";
 mkdirSync(HOME, { recursive: true, mode: 0o700 });
 chmodSync(HOME, 0o700);
 // Mode bits mean little on Windows, where this same promise is kept with an ACL: only this account, nothing inherited.
+// The flags are what carry it into what gets created inside; without them only the folder itself is granted.
 if (process.platform === "win32") {
   try {
-    execFileSync("icacls", [HOME, "/inheritance:r", "/grant:r", `${userInfo().username}:F`], {
+    execFileSync("icacls", [HOME, "/inheritance:r", "/grant:r", `${userInfo().username}:(OI)(CI)F`], {
       stdio: "ignore",
       windowsHide: true,
     });

@@ -37,6 +37,9 @@ after(() => {
 const { loadPlugin } = await import("../host/plugins.ts");
 const { default: desktop, notifyCommand } = await import("../plugins/desktop/channel.ts");
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const TITLE = "Agent 问你一个问题";
 const WORDS = "运行 agent-autoloop status 查看";
 const body = (title: string) => `${title}\n${WORDS}`;

@@ -18,6 +18,9 @@ import webhook from "../plugins/webhook/channel.ts";
 import github from "../plugins/github/source.ts";
 import type { Card } from "../host/channels.ts";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-channels-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 

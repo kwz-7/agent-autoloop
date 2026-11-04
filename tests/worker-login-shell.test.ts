@@ -18,6 +18,9 @@ process.env.XDG_CONFIG_HOME = join(scratch, "config");
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const { createWorker } = await import("../worker/worker.ts");
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 // CI has no fish, so this keeps the two things about it that matter: no $0 or $@, and no arguments reach the command.
 const standIn = join(scratch, "not-posix-shell");
 writeFileSync(

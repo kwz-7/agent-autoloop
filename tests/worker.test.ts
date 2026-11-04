@@ -31,6 +31,9 @@ const { createWorker } = await import("../worker/worker.ts");
 const { HubError } = await import("../protocol/client.ts");
 const { saveUsage } = await import("../worker/usage.ts");
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 // An adapter with a session: it answers with what the script printed, and takes `resume` so a test can see it was asked.
 mkdirSync(join(home, "plugins", "scripted"), { recursive: true });
 writeFileSync(

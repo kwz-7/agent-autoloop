@@ -27,8 +27,8 @@ $major = [int](((node -v) -replace '^v', '') -split '\.')[0]
 if ($major -lt 24) { Need-Node "需要 Node.js 24 或更新，现在是 $(node -v)。" }
 
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
-# 0700 on Windows is an ACL: only this account, nothing inherited.
-& icacls $Root /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+# 0700 on Windows is an ACL: only this account, nothing inherited, and carried into what gets created below.
+& icacls $Root /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
 
 if (Test-Path (Join-Path $App ".git")) {
   & git -C $App pull --ff-only --quiet

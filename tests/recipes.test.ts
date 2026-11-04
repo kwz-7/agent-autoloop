@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { readMessage, resultFrom } from "../worker/contract.ts";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const ROOT = join(import.meta.dirname, "..");
 const RECIPES = join(ROOT, "examples", "recipes");
 const NAMES = [

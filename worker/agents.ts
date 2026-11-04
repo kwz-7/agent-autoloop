@@ -83,8 +83,10 @@ function onPath(name: string): string | null {
         timeout: 15_000,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const first = printed.trim().split(/\r?\n/).filter(Boolean).at(0);
-      return first ? throughShim(first) : null;
+      // `where` also lists the extension-less shell script npm writes for Git Bash, which nothing here can start.
+      const found = printed.trim().split(/\r?\n/).filter(Boolean);
+      const program = found.find((file) => /\.exe$/i.test(file)) ?? found.find((file) => /\.(cmd|bat)$/i.test(file));
+      return program ? throughShim(program) : null;
     }
     const shell = process.env.SHELL ?? "/bin/sh";
     const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {

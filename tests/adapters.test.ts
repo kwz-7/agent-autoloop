@@ -15,13 +15,21 @@ import { setup } from "./helpers.ts";
 process.env.PATH = `/nonexistent:${process.env.PATH}`;
 const { findProgram } = await import("../worker/agents.ts");
 // Command construction must also run on CI machines without Codex installed.
-const shell = process.env.SHELL;
-const lookup = join(setup("adapters"), "lookup.sh");
-writeFileSync(lookup, '#!/bin/sh\nprintf "%s\\n" /test/codex\n', { mode: 0o755 });
-process.env.SHELL = lookup;
+if (process.platform === "win32") {
+  // Windows asks `where`, which finds only what has an extension, so the stand-in is a .cmd.
+  const dir = setup("adapters");
+  writeFileSync(join(dir, "codex.cmd"), "@echo off\r\n");
+  process.env.PATH = `${dir};${process.env.PATH}`;
+} else {
+  const shell = process.env.SHELL;
+  const lookup = join(setup("adapters"), "lookup.sh");
+  writeFileSync(lookup, '#!/bin/sh\nprintf "%s\\n" /test/codex\n', { mode: 0o755 });
+  process.env.SHELL = lookup;
+  findProgram("codex");
+  if (shell === undefined) delete process.env.SHELL;
+  else process.env.SHELL = shell;
+}
 findProgram("codex");
-if (shell === undefined) delete process.env.SHELL;
-else process.env.SHELL = shell;
 type Adapter = import("../worker/agents.ts").Adapter;
 const claude: Adapter = (await import("../plugins/claude/agent.ts")).default;
 const codex: Adapter = (await import("../plugins/codex/agent.ts")).default;

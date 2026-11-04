@@ -18,6 +18,9 @@ import helloSource from "../examples/plugins/hello-source/source.ts";
 import type { ChannelContext } from "../host/channels.ts";
 import type { Adapter } from "../worker/agents.ts";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 // The examples carry their own types so they stand alone in a repository; these keep them in step with the engine's.
 const adapter: Adapter = helloAgent;
 const channel: (context: ChannelContext) => Promise<void> = helloChannel;

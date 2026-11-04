@@ -26,6 +26,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const repo = join(import.meta.dirname, "..");
 const script = join(repo, "install.sh");
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-autoloop-install-")));

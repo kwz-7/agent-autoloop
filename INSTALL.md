@@ -4,7 +4,7 @@
 
 ## 安装
 
-支持 macOS、Linux。Windows 版待定：作者这个周末（11 月 7、8 日）回家后开发并做兼容性测试，进度见 [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17)，现在还不能装。需要 Node.js 24 或更新、Git、curl，以及一个已经登录的命令行 Agent。
+支持 macOS、Windows 和 Linux。Windows 用 PowerShell 7 或 Windows PowerShell 5，装法和 Linux 不同，见下面的 [Windows](#windows)。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent。
 
 先检查 `node --version`。Homebrew 的 `node@24` 默认不进 PATH，装好后还要运行 `export PATH="$(brew --prefix node@24)/bin:$PATH"`；需要长期生效时再写入用户的 shell 配置。不要替用户登录，也不要读取或复制登录凭据。
 
@@ -13,6 +13,14 @@
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+Windows 上在 PowerShell 里运行同样的安装器，换成 `install.ps1`；它克隆、把命令放进 PATH、再交给 `init`：
+
+```powershell
+irm https://raw.githubusercontent.com/kwz-7/agent-autoloop/windows-native/install.ps1 | iex
+```
+
+`install.ps1` 不写 `~/.local/bin` 这种 Unix 路径：它把 `agent-autoloop.cmd` 放进 `%USERPROFILE%\.local\bin`，那是这台电脑上第一个能写、又在 PATH 里的目录。
 
 GitHub Issue 轮询和 PR 交付等功能另需已登录的 `gh`，按对应场景说明配置；运行 Agent 也仍需该 Agent 自己的登录或授权。
 
@@ -28,9 +36,25 @@ AGENT_AUTOLOOP_REPO=/path/to/agent-autoloop sh /path/to/agent-autoloop/install.s
 
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时都会把数据目录设为 `0700`，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时都会把数据目录设为 `0700`，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。Windows 上没有模式位，同一件事用 ACL 做：去掉继承，只给当前账号，并让它延续到里面新建的文件。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
+
+## Windows
+
+装进 `%USERPROFILE%\.agent-autoloop\app`，配置和记录留在 `%USERPROFILE%\.agent-autoloop`。系统服务是任务计划程序里的一个任务（`agent-autoloop`，或换了 `AGENT_AUTOLOOP_HOME` 时带一段哈希），登录时启动，不弹窗口：
+
+```powershell
+agent-autoloop service install
+agent-autoloop doctor
+```
+
+两处和 macOS、Linux 不一样，都不要当成装坏了：
+
+- **停止靠等。** 没有可以处理的信号，程序只能被结束。收到 `stop` 后中台先让它自己收尾，超时才结束整棵进程树，所以停下比 Mac 上慢一点，也可能丢掉还没写完的最后一行输出。
+- **命令行有长度上限。** Windows 一条命令最多 32767 个字符，很长的提示词改走标准输入；这由程序自己处理，不用管。
+
+Agent 的 `claude` 常常是 npm 装出来的 `claude.cmd`。程序会找到它真正指向的可执行文件再启动，不经过 `cmd.exe`，所以提示词里的引号和 `%` 不会被当成命令解释。
 
 ## 临时 HOME、CI 或没有服务管理器
 

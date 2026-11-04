@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { attemptsOf, newFailure } from "../cli/try.ts";
 
+// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const bin = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 const fence = "```";
 const ASKS = `#!/bin/sh
