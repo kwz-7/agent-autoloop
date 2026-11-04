@@ -1,4 +1,4 @@
-// Keeping it running: launchd on a Mac, systemd on Linux. Both start it at login and restart it if it stops.
+// Keeping it running: launchd on a Mac, systemd on Linux, Task Scheduler on Windows. All three start it at login.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -7,6 +7,8 @@ import path from "node:path";
 import { HOME } from "./home.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
+const START = path.join(import.meta.dirname, "start.ts");
+const WINDOWS = process.platform === "win32";
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
 const label = () =>
   HOME === path.join(homedir(), ".agent-autoloop")
@@ -71,6 +73,46 @@ WantedBy=default.target
 `;
 }
 
+const taskFile = () => path.join(HOME, "service.xml");
+/** The task runs as whoever installed it, at logon, without asking for a password. */
+const account = () => `${process.env.USERDOMAIN ?? ""}\\${process.env.USERNAME ?? ""}`;
+
+/**
+ * A scheduled task that starts at logon. `PT0S` removes the 72-hour limit a task has by default, which would otherwise
+ * end the hub on the third day; `IgnoreNew` is what keeps a second copy from starting.
+ */
+export function taskXml(options: UnitOptions = { home: HOME, executable: process.execPath, program: PROGRAM }) {
+  const arguments_ = ["--disable-warning=ExperimentalWarning", START, options.home, "up"].map((part) => `"${part}"`).join(" ");
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Agent 自动化中台</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xml(account())}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${xml(account())}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>10</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Author"><Exec>
+    <Command>${xml(options.executable)}</Command>
+    <Arguments>${xml(arguments_)}</Arguments>
+    <WorkingDirectory>${xml(options.home)}</WorkingDirectory>
+  </Exec></Actions>
+</Task>
+`;
+}
+
 const domain = () => `gui/${process.getuid!()}`;
 const launchdHasIt = () =>
   spawnSync("launchctl", ["print", `${domain()}/${label()}`], { stdio: "ignore" }).status === 0;
@@ -78,6 +120,13 @@ const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(
 
 export function installService() {
   mkdirSync(path.join(HOME, "logs"), { recursive: true, mode: 0o700 });
+  if (WINDOWS) {
+    // schtasks reads the XML as UTF-16 with a byte order mark, and wants Windows line endings.
+    writeFileSync(taskFile(), `\uFEFF${taskXml().replaceAll("\n", "\r\n")}`, "utf16le");
+    execFileSync("schtasks", ["/Create", "/TN", label(), "/XML", taskFile(), "/F"], { stdio: "ignore" });
+    execFileSync("schtasks", ["/Run", "/TN", label()], { stdio: "ignore" });
+    return;
+  }
   if (process.platform === "darwin") {
     mkdirSync(path.dirname(plistFile()), { recursive: true });
     writeFileSync(plistFile(), plist());
@@ -95,6 +144,15 @@ export function installService() {
 }
 
 export function removeService() {
+  if (WINDOWS) {
+    if (!existsSync(taskFile())) return;
+    const service = readFileSync(taskFile(), "utf8");
+    if (!service.includes(START) && !service.includes(PROGRAM)) return;
+    spawnSync("schtasks", ["/End", "/TN", label()], { stdio: "ignore" });
+    spawnSync("schtasks", ["/Delete", "/TN", label(), "/F"], { stdio: "ignore" });
+    rmSync(taskFile(), { force: true });
+    return;
+  }
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file)) return;
   const service = readFileSync(file, "utf8");
@@ -119,12 +177,20 @@ export function runningUp() {
   const pid = readFileSync(file, "utf8").trim();
   let command = "";
   try {
-    command = execFileSync("ps", ["-p", pid, "-o", "command="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    command = WINDOWS
+      ? execFileSync(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+        ) ?? ""
+      : execFileSync("ps", ["-p", pid, "-o", "command="], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
   } catch {}
-  return /agent-autoloop(\.ts)? up\b/.test(command) ? Number(pid) : null;
+  // On Windows the hub is started through host/start.ts, which sets the home and then becomes it.
+  const ours = WINDOWS ? /(agent-autoloop(\.ts)?|start\.ts)[^"]*\bup\b/ : /agent-autoloop(\.ts)? up\b/;
+  return ours.test(command) ? Number(pid) : null;
 }
 
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
@@ -138,6 +204,14 @@ export function stopUp() {
 }
 
 export function serviceRunning() {
+  if (WINDOWS) {
+    const answer = spawnSync("schtasks", ["/Query", "/TN", label(), "/FO", "LIST", "/V"], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    // The task exists and says it is running. The words are localized, so the status line is matched on either.
+    return answer.status === 0 && /(状态|Status):\s*(正在运行|Running)/i.test(answer.stdout ?? "");
+  }
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }

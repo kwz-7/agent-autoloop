@@ -24,6 +24,9 @@ type Check = (value: unknown) => boolean;
 type Field = [name: string, check: Check, problem: string, optional?: boolean];
 
 const isText: Check = (value) => typeof value === "string" && value.trim() !== "";
+/** A folder the agent works in: a home-relative or absolute POSIX path, a drive letter, or a UNC share. */
+const isCwd: Check = (value) =>
+  typeof value === "string" && (/^(~\/|\/)/.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]/.test(value));
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const isWords: Check = (value) => Array.isArray(value) && value.every(isText);
@@ -71,7 +74,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["name", isText, NOT_EMPTY],
     ["when", isObject, "要是一个对象"],
     ["to", isKeyOf(rules.agents), `不是已登记的 Agent：${isObject(rule) ? rule.to : ""}`],
-    ["cwd", (value) => typeof value === "string" && /^(~\/|\/)/.test(value), "要是以 ~/ 或 / 开头的目录"],
+    ["cwd", isCwd, "要是以 ~/、/、盘符（如 C:\\）或 \\\\ 开头的目录"],
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
     ["group", isText, NOT_EMPTY, true],

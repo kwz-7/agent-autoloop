@@ -3,7 +3,7 @@
 // then the ones that ship. Anything with a print mode needs no file at all: `use: "command"` with a command line in
 // rules.json.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { loadPlugin } from "../host/plugins.ts";
 import type { Usage } from "../protocol/validate.ts";
@@ -59,20 +59,49 @@ export async function adapterFor(use: string): Promise<Adapter> {
 
 const found = new Map<string, string | null>();
 
-/** Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), or in one of these. */
-export function findProgram(name: string, elsewhere: () => string[] = () => []) {
-  if (!found.has(name)) {
-    const shell = process.env.SHELL ?? "/bin/sh";
-    let onPath: string | null = null;
-    try {
-      const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
+/**
+ * An npm shim is a .cmd that runs the program it installed, and only a shell can start one. Where the shim names that
+ * program, start it instead: it is the same program without a command line in the middle to quote for.
+ */
+function throughShim(file: string): string {
+  if (!/\.(cmd|bat)$/i.test(file)) return file;
+  try {
+    const named = readFileSync(file, "utf8").match(/"%dp0%\\([^"]+)"/);
+    const real = named && path.join(path.dirname(file), named[1]);
+    return real && existsSync(real) ? real : file;
+  } catch {
+    return file;
+  }
+}
+
+/** Where a program is on the login shell's PATH, which launchd and systemd start with a bare one. */
+function onPath(name: string): string | null {
+  try {
+    if (process.platform === "win32") {
+      const printed = execFileSync("where.exe", [name], {
         encoding: "utf8",
         timeout: 15_000,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      onPath = printed.trim().split("\n").at(-1) || null;
-    } catch {}
-    found.set(name, onPath ?? elsewhere().find(existsSync) ?? null);
+      const first = printed.trim().split(/\r?\n/).filter(Boolean).at(0);
+      return first ? throughShim(first) : null;
+    }
+    const shell = process.env.SHELL ?? "/bin/sh";
+    const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
+      encoding: "utf8",
+      timeout: 15_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return printed.trim().split("\n").at(-1) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), or in one of these. */
+export function findProgram(name: string, elsewhere: () => string[] = () => []) {
+  if (!found.has(name)) {
+    found.set(name, onPath(name) ?? elsewhere().find(existsSync) ?? null);
   }
   const program = found.get(name);
   if (!program) throw new Error(`找不到 ${name}：先装好并登录`);

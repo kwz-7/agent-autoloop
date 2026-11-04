@@ -27,6 +27,7 @@ import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
 import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
+import { aliveWindows, beatFile, planFile, signalWindows, spawnRunner, stopFile, WINDOWS } from "./win.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
 const NOTHING: Usage = { input: 0, output: 0, cached: 0, cost: 0 };
@@ -111,13 +112,14 @@ const files = (entry: Entry) => ({
   out: path.join(entry.dir, `stdout-${entry.turn}.log`),
   err: path.join(entry.dir, `stderr-${entry.turn}.log`),
   exit: path.join(entry.dir, `exit-${entry.turn}`),
-  command: path.join(entry.dir, `command-${entry.turn}.sh`),
+  command: WINDOWS ? planFile(entry.dir, entry.turn) : path.join(entry.dir, `command-${entry.turn}.sh`),
 });
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
 
 /** Whether the run's process is still going: false when it is gone, null when we could not look. */
 function alive(entry: Entry): boolean | null {
+  if (WINDOWS) return aliveWindows(entry.pid, beatFile(entry.dir, entry.turn), files(entry).exit);
   if (!entry.pid) return false;
   try {
     const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
@@ -132,6 +134,7 @@ function alive(entry: Entry): boolean | null {
 }
 
 function signal(entry: Entry, name: NodeJS.Signals) {
+  if (WINDOWS) return signalWindows(entry.pid, stopFile(entry.dir, entry.turn), name === "SIGKILL");
   try {
     if (entry.pid) process.kill(-entry.pid, name);
   } catch {}
@@ -139,6 +142,8 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 
 /** Whether anything in the run's group is still going, null when we could not look. */
 function groupAlive(entry: Entry): boolean | null {
+  // Windows kills the tree as one, so the runner's own liveness is the group's.
+  if (WINDOWS) return aliveWindows(entry.pid, beatFile(entry.dir, entry.turn), files(entry).exit);
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
@@ -221,6 +226,24 @@ export function createWorker({
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
     const argv = adapter.command(turn);
     const { out, err, exit, command } = files(entry);
+    // Windows: an npm shim is a .cmd, and nothing spawns one without a shell in between, so the real program is what gets
+    // started. The plan waits in a file because a prompt can be long and a command line on Windows can hold 32767.
+    if (WINDOWS) {
+      const plan = {
+        out,
+        err,
+        exit,
+        beat: beatFile(entry.dir, entry.turn),
+        stop: stopFile(entry.dir, entry.turn),
+        cwd,
+        argv,
+      };
+      writeFileSync(command, JSON.stringify(plan), { mode: 0o600 });
+      entry.pid = spawnRunner(command, agentEnvironment(entry));
+      save(entry);
+      log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${entry.pid}`);
+      return;
+    }
     // Login shells don't agree on how a command reads its arguments (fish has no $0 or $@), so the command waits in a
     // file for /bin/sh. Its path travels by environment because the install path can hold any character.
     writeFileSync(command, `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")}\n`, { mode: 0o600 });

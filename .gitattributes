@@ -1,0 +1,6 @@
+# The source is written with LF everywhere. Windows would otherwise check it out with CRLF and every tool that compares
+# bytes (prettier, the format check in CI) would report the whole tree as changed.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
