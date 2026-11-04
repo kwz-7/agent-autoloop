@@ -82,7 +82,9 @@ const account = () => `${process.env.USERDOMAIN ?? ""}\\${process.env.USERNAME ?
  * end the hub on the third day; `IgnoreNew` is what keeps a second copy from starting.
  */
 export function taskXml(options: UnitOptions = { home: HOME, executable: process.execPath, program: PROGRAM }) {
-  const arguments_ = ["--disable-warning=ExperimentalWarning", START, options.home, "up"].map((part) => `"${part}"`).join(" ");
+  const arguments_ = ["--disable-warning=ExperimentalWarning", START, options.home, "up"]
+    .map((part) => `"${part}"`)
+    .join(" ");
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Agent 自动化中台</Description></RegistrationInfo>
@@ -178,11 +180,16 @@ export function runningUp() {
   let command = "";
   try {
     command = WINDOWS
-      ? execFileSync(
+      ? (execFileSync(
           "powershell",
-          ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+          ],
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
-        ) ?? ""
+        ) ?? "")
       : execFileSync("ps", ["-p", pid, "-o", "command="], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],

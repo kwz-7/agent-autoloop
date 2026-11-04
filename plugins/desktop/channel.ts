@@ -27,10 +27,7 @@ export function notifyCommand(title: string, platform: string = process.platform
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
   if (platform === "win32") {
-    return [
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-Command", BALLOON.join("; "), "-Args", TITLE, body],
-    ];
+    return ["powershell", ["-NoProfile", "-NonInteractive", "-Command", BALLOON.join("; "), "-Args", TITLE, body]];
   }
   return ["notify-send", ["--", TITLE, body]];
 }

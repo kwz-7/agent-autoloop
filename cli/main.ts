@@ -109,7 +109,11 @@ function linkSkill() {
     if (lstatSync(link, { throwIfNoEntry: false })) continue;
     mkdirSync(path.dirname(link), { recursive: true });
     // A directory symlink needs a privilege Windows does not hand out, a junction does not.
-    symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link, process.platform === "win32" ? "junction" : undefined);
+    symlinkSync(
+      path.join(ROOT, "skills", "agent-autoloop"),
+      link,
+      process.platform === "win32" ? "junction" : undefined,
+    );
   }
 }
 
@@ -117,13 +121,16 @@ function linkSkill() {
 function howToRun() {
   if (process.platform === "win32") {
     const printed = spawnSync("where.exe", ["agent-autoloop"], { encoding: "utf8", windowsHide: true }).stdout ?? "";
-    const ours = printed.split(/\r?\n/).filter(Boolean).some((file) => {
-      try {
-        return readFileSync(file, "utf8").includes(PROGRAM);
-      } catch {
-        return false;
-      }
-    });
+    const ours = printed
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .some((file) => {
+        try {
+          return readFileSync(file, "utf8").includes(PROGRAM);
+        } catch {
+          return false;
+        }
+      });
     if (ours) return "agent-autoloop";
   } else {
     const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout.trim();
