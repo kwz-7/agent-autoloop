@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { resolveProgram } from "../../host/programs.ts";
 import type { DeliveryIO } from "./delivery.ts";
 import { git, liveRelease, releaseRequired } from "./project.ts";
 import { reviewSnapshot } from "./review.ts";
@@ -12,7 +13,8 @@ const LONGEST_WAIT = 1800000;
 
 export function gh(args: string[], input?: object) {
   const stdin = input === undefined ? undefined : JSON.stringify(input);
-  return execFileSync("gh", args, {
+  const [program, ...lead] = resolveProgram("gh");
+  return execFileSync(program, [...lead, ...args], {
     input: stdin,
     encoding: "utf8",
     timeout: 60000,

@@ -1,6 +1,7 @@
 // The installed bridge owns browser access. This launcher only passes trusted scope as one literal argument.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolveProgram } from "../../../host/programs.ts";
 
 const [file, flag, session, ...extra] = process.argv.slice(2);
 if (
@@ -36,7 +37,9 @@ const prompt = [
   "不要回传密码、验证码、Cookie、访问令牌或无关页面内容；截图先避开敏感信息。",
   "结束前关闭本次新建的标签，保留原有标签。由主任务负责业务和中台回执。",
 ].join("\n");
-const run = spawnSync(task.command[0], [...task.command.slice(1), ...(session ? ["--resume", session] : []), prompt], {
+// On Windows the entry npm installed is a .cmd: the program it runs is what gets started, with the prompt as one argument.
+const [program, ...lead] = resolveProgram(task.command[0]);
+const run = spawnSync(program, [...lead, ...task.command.slice(1), ...(session ? ["--resume", session] : []), prompt], {
   stdio: "inherit",
 });
 if (run.error) throw run.error;
