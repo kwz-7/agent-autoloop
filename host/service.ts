@@ -212,12 +212,14 @@ export function stopUp() {
 
 export function serviceRunning() {
   if (WINDOWS) {
-    const answer = spawnSync("schtasks", ["/Query", "/TN", label(), "/FO", "LIST", "/V"], {
-      encoding: "utf8",
-      windowsHide: true,
-    });
-    // The task exists and says it is running. The words are localized, so the status line is matched on either.
-    return answer.status === 0 && /(状态|Status):\s*(正在运行|Running)/i.test(answer.stdout ?? "");
+    // schtasks prints its field names in the system language and its output is not UTF-8, so it is not read: the task's
+    // state is asked for as an enum, whose name is the same on every Windows.
+    const answer = spawnSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", `(Get-ScheduledTask -TaskName '${label()}').State`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    return (answer.stdout ?? "").trim() === "Running";
   }
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
