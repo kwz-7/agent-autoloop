@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+// The browser entry this file stands in for is a shell script, and Windows has no shell to run it with.
+if (process.platform === "win32") process.exit(0);
+
 const root = mkdtempSync(join(tmpdir(), "autoloop-browser-template-"));
 after(() => rmSync(root, { recursive: true, force: true }));
 const session = "12345678-1234-1234-1234-123456789abc";

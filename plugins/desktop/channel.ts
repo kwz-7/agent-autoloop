@@ -8,16 +8,19 @@ import type { Card, ChannelContext } from "../../host/channels.ts";
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
+/** In a single-quoted PowerShell string nothing is expanded; only a quote itself has to be doubled. */
+const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
 /** A balloon tip from the notification area: the one thing a logged-in Windows session always has. */
-const BALLOON = [
-  "Add-Type -AssemblyName System.Windows.Forms",
-  "$n = New-Object System.Windows.Forms.NotifyIcon",
-  "$n.Icon = [System.Drawing.SystemIcons]::Information",
-  "$n.Visible = $true",
-  "$n.ShowBalloonTip(5000, $args[0], $args[1], 'Info')",
-  "Start-Sleep -Milliseconds 5000",
-  "$n.Dispose()",
-];
+const balloon = (title: string, body: string) =>
+  [
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$n = New-Object System.Windows.Forms.NotifyIcon",
+    "$n.Icon = [System.Drawing.SystemIcons]::Information",
+    "$n.Visible = $true",
+    `$n.ShowBalloonTip(5000, ${literal(title)}, ${literal(body)}, 'Info')`,
+    "Start-Sleep -Milliseconds 5000",
+    "$n.Dispose()",
+  ].join("; ");
 
 /**
  * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
@@ -26,9 +29,8 @@ const BALLOON = [
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
-  if (platform === "win32") {
-    return ["powershell", ["-NoProfile", "-NonInteractive", "-Command", BALLOON.join("; "), "-Args", TITLE, body]];
-  }
+  // PowerShell has no arguments of its own after `-Command`: the title is quoted into the script instead.
+  if (platform === "win32") return ["powershell", ["-NoProfile", "-NonInteractive", "-Command", balloon(TITLE, body)]];
   return ["notify-send", ["--", TITLE, body]];
 }
 

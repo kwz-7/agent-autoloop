@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+// What is under test is the shell wrapper, and Windows has no shell to wrap: it starts the agent directly.
+if (process.platform === "win32") process.exit(0);
+
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-worker-path-"));
 const home = join(scratch, "quote' $(touch path-injected)");
 const project = join(scratch, "project");

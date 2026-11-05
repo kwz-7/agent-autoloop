@@ -8,6 +8,10 @@ import { join } from "node:path";
 import { test, after } from "node:test";
 import { setup } from "./helpers.ts";
 import { conformance } from "../protocol/conformance.ts";
+
+// The examples under test are shell scripts, and Windows has no shell to run them with: they run where there is one.
+if (process.platform === "win32") process.exit(0);
+
 const home = setup("examples");
 const rules = JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_RULES!, "utf8"));
 rules.rules = rules.rules.filter(({ when }: { when: object }) => "source" in when);

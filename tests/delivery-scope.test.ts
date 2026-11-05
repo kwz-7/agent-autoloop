@@ -56,6 +56,20 @@ test("release scope compares the entire healthy-live range and both sides of ren
 test("executable or symlink documents and unknown history always need release", () => {
   for (const mode of ["executable", "symlink"]) {
     git("reset", "--hard", base);
+    if (process.platform === "win32") {
+      // Windows has no executable bit and makes a symlink only with a privilege. The mode lives in git's index entry,
+      // so that is written directly: 100755 for an executable file, 120000 for a symlink.
+      rmSync(join(root, "docs/a.md"));
+      const hash = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: root,
+        input: "../app.ts",
+        encoding: "utf8",
+      }).trim();
+      git("update-index", "--add", "--cacheinfo", `${mode === "executable" ? "100755" : "120000"},${hash},docs/a.md`);
+      git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "test");
+      assert.equal(releaseRequired(root, base, git("rev-parse", "HEAD"), config.internal), true);
+      continue;
+    }
     if (mode === "executable") chmodSync(join(root, "docs/a.md"), 0o755);
     else {
       rmSync(join(root, "docs/a.md"));

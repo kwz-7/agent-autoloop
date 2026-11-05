@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { after, test } from "node:test";
 import { probe, receipt } from "../examples/recipes/website-watch/check.ts";
 import { readMessage, resultFrom } from "../worker/contract.ts";
@@ -69,7 +69,9 @@ test("a Chinese health URL remains a valid event link in the worker receipt", ()
 
 function collect(mode = "ok") {
   const dir = mkdtempSync(join(scratch, "brief-"));
-  const cli = join(dir, "lark-cli");
+  // Windows starts a command by its extension, so the stand-in is a script plus the .cmd that names it, the way npm
+  // installs a CLI there.
+  const cli = join(dir, process.platform === "win32" ? "lark-cli.js" : "lark-cli");
   writeFileSync(
     cli,
     `#!${process.execPath}
@@ -95,6 +97,9 @@ console.log(JSON.stringify({ok:true,identity:'user',data}));
 `,
     { mode: 0o755 },
   );
+  if (process.platform === "win32") {
+    writeFileSync(join(dir, "lark-cli.cmd"), `@ECHO off\r\n"%dp0%\\lark-cli.js" %*\r\n`);
+  }
   writeFileSync(
     join(dir, "sources.json"),
     JSON.stringify({
@@ -119,7 +124,11 @@ console.log(JSON.stringify({ok:true,identity:'user',data}));
     {
       cwd: dir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, AGENT_AUTOLOOP_CONTEXT: join(dir, "context.json") },
+      env: {
+        ...process.env,
+        PATH: `${dir}${delimiter}${process.env.PATH}`,
+        AGENT_AUTOLOOP_CONTEXT: join(dir, "context.json"),
+      },
     },
   );
   return { dir, run, parsed: resultFrom(readMessage(run.stdout), {}) };

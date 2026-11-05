@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveProgram } from "../../../host/programs.ts";
 
 type Report = {
   task_id: string;
@@ -16,7 +17,9 @@ type Sources = { reportRule: string; reportUsers: string[]; tables: Table[] };
 class AuthorizationError extends Error {}
 
 function lark(args: string[]) {
-  const run = spawnSync("lark-cli", [...args, "--as", "user"], {
+  // On Windows the CLI npm installs is a .cmd: the program it runs is what gets started.
+  const [program, ...lead] = resolveProgram("lark-cli");
+  const run = spawnSync(program, [...lead, ...args, "--as", "user"], {
     encoding: "utf8",
     timeout: 60_000,
     maxBuffer: 16 * 1024 * 1024,

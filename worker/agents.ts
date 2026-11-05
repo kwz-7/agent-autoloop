@@ -3,8 +3,8 @@
 // then the ones that ship. Anything with a print mode needs no file at all: `use: "command"` with a command line in
 // rules.json.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync } from "node:fs";
+import { findOnPath } from "../host/programs.ts";
 import { loadPlugin } from "../host/plugins.ts";
 import type { Usage } from "../protocol/validate.ts";
 
@@ -60,34 +60,13 @@ export async function adapterFor(use: string): Promise<Adapter> {
 const found = new Map<string, string | null>();
 
 /**
- * An npm shim is a .cmd that runs the program it installed, and only a shell can start one. Where the shim names that
- * program, start it instead: it is the same program without a command line in the middle to quote for.
+ * Where a program is on the login shell's PATH, which launchd and systemd start with a bare one. Windows has no login
+ * shell to ask: `where` and the shim it names do the same job there.
  */
-function throughShim(file: string): string {
-  if (!/\.(cmd|bat)$/i.test(file)) return file;
-  try {
-    const named = readFileSync(file, "utf8").match(/"%dp0%\\([^"]+)"/);
-    const real = named && path.join(path.dirname(file), named[1]);
-    return real && existsSync(real) ? real : file;
-  } catch {
-    return file;
-  }
-}
-
-/** Where a program is on the login shell's PATH, which launchd and systemd start with a bare one. */
 function onPath(name: string): string | null {
   try {
-    if (process.platform === "win32") {
-      const printed = execFileSync("where.exe", [name], {
-        encoding: "utf8",
-        timeout: 15_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      // `where` also lists the extension-less shell script npm writes for Git Bash, which nothing here can start.
-      const found = printed.trim().split(/\r?\n/).filter(Boolean);
-      const program = found.find((file) => /\.exe$/i.test(file)) ?? found.find((file) => /\.(cmd|bat)$/i.test(file));
-      return program ? throughShim(program) : null;
-    }
+    const elsewhere = findOnPath(name);
+    if (process.platform === "win32") return elsewhere ?? null;
     const shell = process.env.SHELL ?? "/bin/sh";
     const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
       encoding: "utf8",

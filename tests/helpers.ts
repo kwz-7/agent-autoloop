@@ -10,7 +10,15 @@ export function setup(name: string, rules = "rules.fixture.json") {
   process.env.AGENT_AUTOLOOP_HOME = directory;
   process.env.AGENT_AUTOLOOP_RULES = rules.startsWith("/") ? rules : join(import.meta.dirname, rules);
   process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
-  after(() => rmSync(directory, { recursive: true, force: true }));
+  after(() => {
+    try {
+      rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    } catch (error) {
+      // Windows refuses to remove a file another handle still has open; a temporary folder is not worth failing a test
+      // that passed over, and the system cleans it up later.
+      if (process.platform !== "win32") throw error;
+    }
+  });
   return directory;
 }
 
