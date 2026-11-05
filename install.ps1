@@ -3,7 +3,9 @@
 # and hand over to `init`.
 $ErrorActionPreference = "Stop"
 
-$Repo = if ($env:AGENT_AUTOLOOP_REPO) { $env:AGENT_AUTOLOOP_REPO } else { "https://github.com/KKKKhazix/agent-autoloop.git" }
+$Repo = if ($env:AGENT_AUTOLOOP_REPO) { $env:AGENT_AUTOLOOP_REPO } else { "https://github.com/kwz-7/agent-autoloop.git" }
+# The Windows version is what this script came from, so that is what it installs: the branch is cloned, not main.
+$Branch = if ($env:AGENT_AUTOLOOP_BRANCH) { $env:AGENT_AUTOLOOP_BRANCH } else { "windows-native" }
 $Root = if ($env:AGENT_AUTOLOOP_HOME) { $env:AGENT_AUTOLOOP_HOME } else { Join-Path $HOME ".agent-autoloop" }
 $App = Join-Path $Root "app"
 $Program = Join-Path $App "bin\agent-autoloop.ts"
@@ -33,7 +35,7 @@ New-Item -ItemType Directory -Force -Path $Root | Out-Null
 if (Test-Path (Join-Path $App ".git")) {
   & git -C $App pull --ff-only --quiet
 } else {
-  & git clone --quiet --depth 1 -- $Repo $App
+  & git clone --quiet --depth 1 --branch $Branch -- $Repo $App
 }
 
 # Only a folder that's on PATH makes `agent-autoloop` work, and an agent-autoloop that isn't this one is someone else's.
