@@ -20,8 +20,9 @@ function safeJson(text: unknown): any {
 
 function outcomeOf(card: Card) {
   const chosen = card.choice === null ? card.answer : card.options[card.choice];
-  if (card.state === "decided") return `你选了「${chosen}」，已记录，等待处理。`;
-  if (card.state === "done") return `你选了「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
+  const picked = card.choice === null ? "回复了" : "选了";
+  if (card.state === "decided") return `你${picked}「${chosen}」，已记录，等待处理。`;
+  if (card.state === "done") return `你${picked}「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
   if (card.state === "closed" && card.kind === "ask") return `不用决定了：${card.result ?? ""}`;
   return card.state === "closed" && card.result ? card.result : null;
 }
@@ -74,6 +75,36 @@ export function render(card: Card) {
           },
         ]
       : [];
+  // An ask card takes words of your own as well: typing them answers the same run, no option needed.
+  const replyForm =
+    card.kind === "ask"
+      ? [
+          {
+            tag: "form",
+            name: "reply",
+            elements: [
+              {
+                tag: "input",
+                name: "reply",
+                input_type: "multiline_text",
+                rows: 2,
+                auto_resize: true,
+                max_length: 1000,
+                label: { tag: "plain_text", content: "回复（补充要求或追问，不选按钮也行）" },
+                label_position: "top",
+                placeholder: { tag: "plain_text", content: "比如：再看一下 xxx 资源；或者：先别改，说说影响面" },
+              },
+              {
+                tag: "button",
+                name: `reply_submit_${card.id}`,
+                form_action_type: "submit",
+                type: "primary",
+                text: { tag: "plain_text", content: "回复并继续" },
+              },
+            ],
+          },
+        ]
+      : [];
   return {
     schema: "2.0",
     config: { update_multi: true, enable_forward: false },
@@ -84,7 +115,9 @@ export function render(card: Card) {
     body: {
       elements: [
         ...(card.text ? [{ tag: "markdown", content: card.text }] : []),
-        ...(card.state === "open" ? [...noteForm, ...card.options.map(option)] : [...afterwards, ...noteSaid]),
+        ...(card.state === "open"
+          ? [...noteForm, ...card.options.map(option), ...replyForm]
+          : [...afterwards, ...noteSaid]),
       ],
     },
   };
@@ -171,8 +204,23 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     const value = safeJson(event.action_value);
     // A form's submit button can't carry a value, so its name holds the card's number.
     const named = /^handling_note_submit_(\d+)$/.exec(String(event.action_name ?? ""));
-    const cardId = Number.isInteger(value?.card) ? value.card : named ? Number(named[1]) : null;
+    const replied = /^reply_submit_(\d+)$/.exec(String(event.action_name ?? ""));
+    const cardId = Number.isInteger(value?.card)
+      ? value.card
+      : named
+        ? Number(named[1])
+        : replied
+          ? Number(replied[1])
+          : null;
     if (!Number.isInteger(cardId)) return;
+    // Words of your own answer the card without picking an option: they go to the same run.
+    if (replied) {
+      const words = typeof form?.reply === "string" ? form.reply.trim() : "";
+      if (!words) return;
+      const answer = await hub.answer(cardId, { text: words, by: event.operator_id, ref: event.message_id });
+      log(`card ${cardId}: replied by ${event.operator_id}, ${answer.changed ? "counted" : "already settled"}`);
+      return;
+    }
     // A notice's only option is that it's been handled, so submitting the form picks it.
     const choice = Number.isInteger(value?.choice) ? value.choice : form ? 0 : null;
     if (choice === null) return;
