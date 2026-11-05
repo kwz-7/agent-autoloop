@@ -10,8 +10,8 @@ import type { Card, ChannelContext } from "../../host/channels.ts";
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
-/** A balloon tip from the notification area: the one thing a logged-in Windows session always has. */
-const BALLOON = path.join(import.meta.dirname, "balloon.ps1");
+/** A toast: Windows 11 no longer shows a notification-area balloon to a program that isn't in front. */
+const TOAST = path.join(import.meta.dirname, "toast.ps1");
 
 /**
  * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
@@ -20,12 +20,12 @@ const BALLOON = path.join(import.meta.dirname, "balloon.ps1");
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
-  // PowerShell has no arguments of its own after `-Command`, so the balloon is a script file taking the two as arguments.
+  // PowerShell has no arguments of its own after `-Command`, so the toast is a script file taking the two as arguments.
   // They are named because a positional body starting with `-` would be read as a parameter name and dropped.
   if (platform === "win32")
     return [
       "powershell",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", BALLOON, "-Title", TITLE, "-Body", body],
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", TOAST, "-Title", TITLE, "-Body", body],
     ];
   return ["notify-send", ["--", TITLE, body]];
 }
@@ -44,7 +44,12 @@ function show(title: string) {
   // Windows starts a `.cmd` shim through cmd and a `.js` through node, so the notifier is looked up like any other program.
   const [lead, ...prefix] = resolveProgram(program);
   return new Promise<void>((resolve, reject) => {
-    execFile(lead, [...prefix, ...args], { timeout: 30_000 }, (error) => (error ? reject(error) : resolve()));
+    execFile(lead, [...prefix, ...args], { timeout: 30_000 }, (error) => {
+      if (!error) return resolve();
+      // What the notifier said is the only way to know why nothing was shown.
+      const said = (error as Error & { stderr?: string }).stderr?.trim();
+      reject(said ? new Error(`${error.message}\n${said}`) : error);
+    });
   });
 }
 

@@ -134,7 +134,7 @@ test("it ships as a channel, and is told apart by platform", async () => {
   const [windows, windowsArgs] = notifyCommand("标题", "win32");
   assert.equal(windows, "powershell");
   assert.deepEqual(windowsArgs.slice(0, 5), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
-  assert.ok(windowsArgs[5].endsWith("balloon.ps1"), "the balloon is a script file of its own");
+  assert.ok(windowsArgs[5].endsWith("toast.ps1"), "the toast is a script file of its own");
   assert.deepEqual(windowsArgs.slice(6), ["-Title", TITLE, "-Body", body("标题")]);
 });
 

@@ -93,7 +93,7 @@ export function render(card: Card) {
 export default async function feishu({ hub, options, log, signal }: ChannelContext) {
   // On Windows the CLI npm installs is a .cmd, which can't be started directly: the program it names is what runs.
   const [program, ...lead] = resolveProgram((options.lark as string | undefined) ?? "lark-cli");
-  const lark = async (args: string[], input: string) => {
+  const ask = async (args: string[], input: string) => {
     const printed = await new Promise<string>((resolve, reject) => {
       const child = execFile(
         program,
@@ -106,9 +106,25 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     });
     const out = JSON.parse(printed);
     if (out.ok === false || out.error) {
-      throw new Error(`lark-cli ${args.slice(0, 3).join(" ")}: ${JSON.stringify(out.error ?? out).slice(0, 300)}`);
+      const error = new Error(
+        `lark-cli ${args.slice(0, 3).join(" ")}: ${JSON.stringify(out.error ?? out).slice(0, 300)}`,
+      ) as Error & { retryable?: boolean };
+      error.retryable = out.error?.retryable === true;
+      throw error;
     }
     return out;
+  };
+  // Feishu rate-limits the token endpoint this CLI asks before every call, and says to back off: a card that fails to
+  // update or send is worth the wait, and one that still fails is reported as before.
+  const lark = async (args: string[], input: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await ask(args, input);
+      } catch (error) {
+        if (!(error as { retryable?: boolean }).retryable || attempt >= 3 || signal.aborted) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
+      }
+    }
   };
   const owner = (options.user as string | undefined) ?? (await lark(["auth", "status"], "")).identities?.user?.openId;
   if (!owner) throw new Error("飞书通道要在 config.json 写 user，或者先 lark-cli auth login");
