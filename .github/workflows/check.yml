@@ -47,3 +47,20 @@ jobs:
         run: npm test
       - if: steps.scope.outputs.scope != 'docs'
         run: sh scripts/install-smoke.sh
+  # The Windows version is a platform of its own: it starts processes, runs a service and finds commands another way,
+  # and none of that is what the two Unix jobs exercise.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run test:quick
