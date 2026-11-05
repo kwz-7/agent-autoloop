@@ -36,7 +36,21 @@ export function notifyCommand(card: Card, platform: string = process.platform): 
   if (platform === "win32")
     return [
       "powershell",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", TOAST, "-Title", TITLE, "-Body", body],
+      // Hidden: powershell is a console program, and a toast that flashes a console window is worse than no toast.
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        TOAST,
+        "-Title",
+        TITLE,
+        "-Body",
+        body,
+      ],
     ];
   return ["notify-send", ["--", TITLE, body]];
 }
