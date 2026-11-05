@@ -147,13 +147,33 @@ export function installService() {
 
 export function removeService() {
   if (WINDOWS) {
-    if (!existsSync(taskFile())) return;
-    const service = readFileSync(taskFile(), "utf8");
-    if (!service.includes(START) && !service.includes(PROGRAM)) return;
+    // The task is asked for what it is, not for a file this program may have cleaned up already: a task that is left
+    // behind with nothing pointing at it would never be found again.
+    const asked = spawnSync("schtasks", ["/Query", "/TN", label(), "/XML"], { encoding: "utf8", windowsHide: true });
+    if (asked.status !== 0) return;
+    // Only the task this program wrote goes: the same name from another install, or from someone else, is left alone.
+    if (!asked.stdout.includes(START) && !asked.stdout.includes(PROGRAM)) return;
     spawnSync("schtasks", ["/End", "/TN", label()], { stdio: "ignore" });
-    spawnSync("schtasks", ["/Delete", "/TN", label(), "/F"], { stdio: "ignore" });
-    rmSync(taskFile(), { force: true });
-    return;
+    // A task that is still running refuses to be deleted, and ending it is not instant: it is asked again until it stops.
+    for (let tries = 0; tries < 40; tries++) {
+      const answer = spawnSync("schtasks", ["/Delete", "/TN", label(), "/F"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      if (answer.status === 0) {
+        rmSync(taskFile(), { force: true });
+        return;
+      }
+      // Gone already: someone else removed it between the two calls.
+      if (spawnSync("schtasks", ["/Query", "/TN", label()], { stdio: "ignore" }).status !== 0) {
+        rmSync(taskFile(), { force: true });
+        return;
+      }
+      pause(250);
+    }
+    throw new Error(
+      `任务计划里的服务删不掉：${spawnSync("schtasks", ["/Query", "/TN", label()], { encoding: "utf8" }).stdout}`,
+    );
   }
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file)) return;

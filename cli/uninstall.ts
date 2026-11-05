@@ -1,6 +1,6 @@
 // `agent-autoloop uninstall`: takes away what the install put on this computer and nothing else. A link is ours only if it really
 // leads to this program: someone else's agent-autoloop, or a folder of their own by that name, stays where it is.
-import { existsSync, lstatSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "../host/home.ts";
@@ -20,11 +20,22 @@ function removeLink(link: string, target: string) {
   console.log(`删掉了 ${link}`);
 }
 
+/** On Windows the command on PATH is a .cmd naming this program, not a link: it goes when it still names it. */
+function removeShim(link: string, program: string) {
+  if (!existsSync(link) || lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) return;
+  if (!readFileSync(link, "utf8").includes(program)) return;
+  unlinkSync(link);
+  console.log(`删掉了 ${link}`);
+}
+
 function removeLinks() {
   const program = path.join(ROOT, "bin", "agent-autoloop.ts");
   const onPath = (process.env.PATH ?? "").split(path.delimiter).filter((place) => path.isAbsolute(place));
   const places = [path.join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", ...onPath];
   for (const place of new Set(places)) removeLink(path.join(place, "agent-autoloop"), program);
+  if (process.platform === "win32") {
+    for (const place of new Set(places)) removeShim(path.join(place, "agent-autoloop.cmd"), program);
+  }
   const skill = path.join(ROOT, "skills", "agent-autoloop");
   for (const agent of [".claude", ".codex"]) removeLink(path.join(homedir(), agent, "skills", "agent-autoloop"), skill);
 }
