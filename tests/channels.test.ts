@@ -18,9 +18,6 @@ import webhook from "../plugins/webhook/channel.ts";
 import github from "../plugins/github/source.ts";
 import type { Card } from "../host/channels.ts";
 
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
-
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-channels-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -138,19 +135,26 @@ test("feishu: a lark-cli that can't be started is said, not left to take the hub
 test("feishu: sends once per card, updates in place, reports failure, and only real clicks count", async () => {
   const log = join(dir, "lark.log");
   const lark = join(dir, "lark-cli");
-  // A stand-in for lark-cli: records each call; `event consume` prints two clicks and waits to be stopped.
+  // A stand-in for lark-cli: records each call; `event consume` prints two clicks and waits to be stopped; a send of a
+  // card that says "fail-me" fails, the way a real send can.
   writeFileSync(
     lark,
-    `#!/bin/sh
-echo "$*" >> "${log}"
-case "$*" in
-  *"event consume"*)
-    echo '{"action_value":"{\\"card\\":5,\\"choice\\":1}","operator_id":"ou_me","message_id":"om_5"}'
-    echo '{"action_value":"{\\"other\\":1}","operator_id":"ou_me","message_id":"om_5"}'
-    exec sleep 30 ;;
-  *fail-me*) exit 1 ;;
-  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_5"}}' ;;
-esac
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");
+if (args.includes("event") && args.includes("consume")) {
+  console.log(JSON.stringify({ action_value: JSON.stringify({ card: 5, choice: 1 }), operator_id: "ou_me", message_id: "om_5" }));
+  console.log(JSON.stringify({ action_value: JSON.stringify({ other: 1 }), operator_id: "ou_me", message_id: "om_5" }));
+  setInterval(() => {}, 1000);
+} else {
+  (async () => {
+    let input = "";
+    for await (const chunk of process.stdin) input += chunk;
+    if (args.includes("+messages-send") && input.includes("fail-me")) process.exit(1);
+    console.log(JSON.stringify({ ok: true, data: { message_id: "om_5" } }));
+  })();
+}
 `,
   );
   chmodSync(lark, 0o755);
@@ -164,7 +168,10 @@ esac
   const hub = {
     async nextCard() {
       if (cards.length) return { card: cards.shift()! };
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // The click comes back from a process this test starts: wait for it rather than for a fixed slice of time.
+      for (let i = 0; i < 200 && !calls.some((c) => c[0] === "answer"); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       stop.abort();
       return { card: null };
     },
@@ -181,14 +188,6 @@ esac
       return { changed: true };
     },
   };
-  // A card that can't be sent: lark-cli is told to fail by the words in it.
-  writeFileSync(
-    lark,
-    readFileSync(lark, "utf8").replace(
-      "*fail-me*) exit 1 ;;",
-      '*+messages-send*) body=$(cat); case "$body" in *fail-me*) exit 1 ;; esac; echo \'{"ok":true,"data":{"message_id":"om_5"}}\' ;;',
-    ),
-  );
   await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
   const lines = readFileSync(log, "utf8").trim().split("\n");
   const sends = lines.filter((l) => l.includes("+messages-send"));
@@ -222,15 +221,20 @@ test("feishu: a form submit carries the handling note, and the button's name fin
   // A form submit has an empty action_value: the card's number is in the button's name, the note in form_value.
   writeFileSync(
     lark,
-    `#!/bin/sh
-echo "$*" >> "${log}"
-case "$*" in
-  *"event consume"*)
-    echo '{"action_name":"handling_note_submit_7","action_tag":"button","action_value":"","form_value":"{\\"note\\":\\"已回他，下周发视频\\"}","operator_id":"ou_me","message_id":"om_7"}'
-    echo '{"action_name":"handling_note_submit_7","action_value":"{\\"card\\":7,\\"choice\\":0}","operator_id":"ou_me","message_id":"om_7"}'
-    exec sleep 30 ;;
-  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_7"}}' ;;
-esac
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");
+if (args.includes("event") && args.includes("consume")) {
+  console.log(JSON.stringify({ action_name: "handling_note_submit_7", action_tag: "button", action_value: "", form_value: JSON.stringify({ note: "已回他，下周发视频" }), operator_id: "ou_me", message_id: "om_7" }));
+  console.log(JSON.stringify({ action_name: "handling_note_submit_7", action_value: JSON.stringify({ card: 7, choice: 0 }), operator_id: "ou_me", message_id: "om_7" }));
+  setInterval(() => {}, 1000);
+} else {
+  (async () => {
+    for await (const chunk of process.stdin) {}
+    console.log(JSON.stringify({ ok: true, data: { message_id: "om_7" } }));
+  })();
+}
 `,
   );
   chmodSync(lark, 0o755);
@@ -240,7 +244,10 @@ esac
   const hub = {
     async nextCard() {
       if (cards.length) return { card: cards.shift()! };
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // The form and the click come back from a process this test starts: wait for both rather than for a fixed slice.
+      for (let i = 0; i < 200 && calls.filter((c) => c[0] === "answer").length < 2; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       stop.abort();
       return { card: null };
     },

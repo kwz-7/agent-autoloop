@@ -3,8 +3,10 @@
 // another; the curl in ops-alerts no longer reaches its rule, or the outside system's key can set off the restart; the
 // issue watcher prints something the worker can't read (a body's line break or backslash breaking its JSON), or an event
 // the rules wouldn't let through, or asks GitHub for something else when called with one argument.
+// The watcher tests run examples/watch-github-issues.sh as shipped, and that is POSIX sh: they are the only tests here
+// that Windows skips. The README's curl is run by the shell a Windows reader pastes it into.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,9 +14,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readMessage, resultFrom } from "../worker/contract.ts";
-
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
 
 const ROOT = join(import.meta.dirname, "..");
 const RECIPES = join(ROOT, "examples", "recipes");
@@ -94,6 +93,20 @@ async function freePort() {
   return port;
 }
 
+/** The shell a Windows reader pastes the README's bash block into. PowerShell 7 is what this machine has. */
+const windowsShell = () =>
+  spawnSync("where.exe", ["pwsh.exe"], { encoding: "utf8", windowsHide: true }).status === 0
+    ? "pwsh.exe"
+    : "powershell.exe";
+
+/** Ends a hub and waits for it, whether or not it got as far as handling SIGTERM. */
+async function stop(child: ChildProcess) {
+  if (child.exitCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await exited;
+}
+
 test("ops-alerts: the curl in the README reaches the rule, and that key can't set off the restart", async () => {
   const home = mkdtempSync(join(scratch, "ops-"));
   const port = await freePort();
@@ -115,10 +128,19 @@ test("ops-alerts: the curl in the README reaches the rule, and that key can't se
     }
     const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
     assert.ok(curl, "README 里要有一条 curl");
-    const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
-      env: { ...cleanEnv(), SHOP_KEY: key },
-      encoding: "utf8",
-    });
+    const command = curl.replaceAll("http://127.0.0.1:3350", url);
+    // In PowerShell the README's `$SHOP_KEY` is `$env:SHOP_KEY`, and `curl` is the `curl.exe` Windows ships with.
+    const windows = () => command.replaceAll("$SHOP_KEY", () => "$env:SHOP_KEY").replace(/^curl\b/, "curl.exe");
+    const sent =
+      process.platform === "win32"
+        ? spawnSync(windowsShell(), ["-NoProfile", "-NonInteractive", "-Command", windows()], {
+            env: { ...cleanEnv(), SHOP_KEY: key },
+            encoding: "utf8",
+          })
+        : spawnSync("sh", ["-c", command], {
+            env: { ...cleanEnv(), SHOP_KEY: key },
+            encoding: "utf8",
+          });
     assert.equal(sent.status, 0, sent.stderr);
     assert.deepEqual(JSON.parse(sent.stdout).routed, ["查线上报错"]);
     const restart = await fetch(`${url}/v1/events`, {
@@ -128,8 +150,7 @@ test("ops-alerts: the curl in the README reaches the rule, and that key can't se
     });
     assert.deepEqual((await restart.json()).routed, []);
   } finally {
-    hub.kill("SIGTERM");
-    await new Promise((resolve) => hub.once("exit", resolve));
+    await stop(hub);
   }
 });
 
@@ -171,32 +192,43 @@ function watch(args: string[]) {
   return { said: done.stdout, asked: readFileSync(join(dir, "log"), "utf8"), issues };
 }
 
-test("github-issues: what the watcher prints goes through the worker whole, and the rules let it in", () => {
-  const { said, issues } = watch(["owner/repo"]);
-  const { result, problem } = resultFrom(readMessage(said), {});
-  assert.equal(problem, undefined);
-  assert.equal(result.outcome, "done");
-  const events = result.events!;
-  assert.equal(events[0].id, "issue-12");
-  assert.equal(events[0].subject, "#12");
-  assert.equal(events[0].summary, issues[0].title);
-  assert.equal(events[0].detail, issues[0].body, "the body has to reach an Agent that can't go and read it");
-  assert.equal(events[0].link, issues[0].url);
-  assert.equal(events[1].detail, "");
-  assert.equal([...events[2].detail].length, 4000);
-  const rules = readRules("github-issues").rules;
-  const watcher = rules.find((rule: { emits?: unknown }) => rule.emits);
-  const handler = rules.find((rule: { skill?: string }) => rule.skill);
-  for (const { type } of events) {
-    assert.ok(watcher.emits.types.includes(type));
-    assert.ok(handler.when.types.includes(type));
-  }
-  assert.equal(handler.when.source, watcher.emits.source);
-});
+// The shipped watcher is POSIX sh (`set -e`, `${SEARCH:+...}`, printf), so these two run only where there is a shell.
+const noWatcher = process.platform === "win32" ? "examples/watch-github-issues.sh is POSIX sh" : false;
 
-test("github-issues: the watcher's search is optional, and the rules use it to leave old issues alone", () => {
-  assert.doesNotMatch(watch(["owner/repo"]).asked, /--search/);
-  assert.match(watch(["owner/repo", "created:>=2026-11-04"]).asked, /--search created:>=2026-11-04/);
-  const { agents } = readRules("github-issues");
-  assert.ok(agents.watcher.command.some((part: string) => part.startsWith("created:>=")));
-});
+test(
+  "github-issues: what the watcher prints goes through the worker whole, and the rules let it in",
+  { skip: noWatcher },
+  () => {
+    const { said, issues } = watch(["owner/repo"]);
+    const { result, problem } = resultFrom(readMessage(said), {});
+    assert.equal(problem, undefined);
+    assert.equal(result.outcome, "done");
+    const events = result.events!;
+    assert.equal(events[0].id, "issue-12");
+    assert.equal(events[0].subject, "#12");
+    assert.equal(events[0].summary, issues[0].title);
+    assert.equal(events[0].detail, issues[0].body, "the body has to reach an Agent that can't go and read it");
+    assert.equal(events[0].link, issues[0].url);
+    assert.equal(events[1].detail, "");
+    assert.equal([...events[2].detail].length, 4000);
+    const rules = readRules("github-issues").rules;
+    const watcher = rules.find((rule: { emits?: unknown }) => rule.emits);
+    const handler = rules.find((rule: { skill?: string }) => rule.skill);
+    for (const { type } of events) {
+      assert.ok(watcher.emits.types.includes(type));
+      assert.ok(handler.when.types.includes(type));
+    }
+    assert.equal(handler.when.source, watcher.emits.source);
+  },
+);
+
+test(
+  "github-issues: the watcher's search is optional, and the rules use it to leave old issues alone",
+  { skip: noWatcher },
+  () => {
+    assert.doesNotMatch(watch(["owner/repo"]).asked, /--search/);
+    assert.match(watch(["owner/repo", "created:>=2026-11-04"]).asked, /--search created:>=2026-11-04/);
+    const { agents } = readRules("github-issues");
+    assert.ok(agents.watcher.command.some((part: string) => part.startsWith("created:>=")));
+  },
+);

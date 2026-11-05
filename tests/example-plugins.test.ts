@@ -3,23 +3,22 @@
 // output it doesn't expect (a throw stops the worker) or loses the session; hello-channel writes a card but never reports
 // it, so the hub sends it again every minute; hello-source takes a wrong or missing signature, or gives an event the hub
 // refuses; an example drifts from the engine's types; a command in the tutorial doesn't run as written.
+// On Windows the stand-ins are its own: a fake `echo` for hello-agent, a `.cmd` shim for the tutorial's CLI, and the
+// tutorial block runs in PowerShell rather than a POSIX shell.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { after, test } from "node:test";
 import helloAgent from "../examples/plugins/hello-agent/agent.ts";
 import helloChannel from "../examples/plugins/hello-channel/channel.ts";
 import helloSource from "../examples/plugins/hello-source/source.ts";
 import type { ChannelContext } from "../host/channels.ts";
 import type { Adapter } from "../worker/agents.ts";
-
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
 
 // The examples carry their own types so they stand alone in a repository; these keep them in step with the engine's.
 const adapter: Adapter = helloAgent;
@@ -29,7 +28,15 @@ assert.ok(adapter && channel);
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "bin", "agent-autoloop.ts");
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-example-plugins-"));
-after(() => rmSync(scratch, { recursive: true, force: true }));
+after(() =>
+  rmSync(scratch, {
+    recursive: true,
+    force: true,
+    // Windows refuses to remove a file a worker or channel still has open; a temporary folder is not worth a failure.
+    maxRetries: process.platform === "win32" ? 20 : 0,
+    retryDelay: 50,
+  }),
+);
 
 const cleanEnv = () =>
   Object.fromEntries(
@@ -60,6 +67,32 @@ async function until<T>(what: string, look: () => Promise<T | undefined> | T | u
   }
   throw new Error(`等不到：${what}`);
 }
+
+/** Ends a hub and waits for it, whether or not it got as far as handling SIGTERM. */
+async function stop(child: ChildProcess) {
+  if (child.exitCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await exited;
+}
+
+/**
+ * hello-agent stands in for a CLI with `echo`, which Windows has no executable for. A folder holding `echo.cmd` naming a
+ * script that prints its argument, first on PATH, is the same stand-in npm installs for a CLI there.
+ */
+function echoOnPath() {
+  const dir = mkdtempSync(join(scratch, "echo-"));
+  const script = join(dir, "echo.js");
+  writeFileSync(script, "process.stdout.write(`${process.argv[2]}\\n`);\n");
+  writeFileSync(join(dir, "echo.cmd"), `@ECHO off\r\n"%dp0%\\echo.js" %*\r\n`);
+  return dir;
+}
+
+/** The shell a Windows reader pastes the tutorial's bash block into. */
+const windowsShell = () =>
+  spawnSync("where.exe", ["pwsh.exe"], { encoding: "utf8", windowsHide: true }).status === 0
+    ? "pwsh.exe"
+    : "powershell.exe";
 
 const turn = {
   prompt: "做这件事",
@@ -224,7 +257,14 @@ test("agent-autoloop add from a git repository, then all three run through a rea
   const owner = { authorization: `Bearer ${newKey(home, "owner", "me")}` };
   writeFileSync(join(home, "secrets.env"), "AGENT_AUTOLOOP_SECRET_SHOP=s3cret\n");
   const up = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", CLI, "up"], {
-    env: { ...cleanEnv(), AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
+    env: {
+      ...cleanEnv(),
+      AGENT_AUTOLOOP_HOME: home,
+      // Windows starts the resolved program itself; POSIX starts it from the login shell, which the fixture names.
+      ...(process.platform === "win32"
+        ? { PATH: `${echoOnPath()}${delimiter}${process.env.PATH}` }
+        : { SHELL: "/bin/sh" }),
+    },
     stdio: "ignore",
   });
   const stream = new AbortController();
@@ -258,8 +298,7 @@ test("agent-autoloop add from a git repository, then all three run through a rea
     });
   } finally {
     stream.abort();
-    up.kill("SIGTERM");
-    await new Promise((resolve) => up.once("exit", resolve));
+    await stop(up);
   }
 });
 
@@ -271,25 +310,48 @@ async function runBlock(heading: string, oldPort: number) {
   const dir = mkdtempSync(join(scratch, "block-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
+  const port = await freePort();
+  const script = block.replaceAll("~/.agent-autoloop/app", ROOT).replaceAll(String(oldPort), String(port));
+  const env = { ...cleanEnv(), PATH: `${bin}${delimiter}${process.env.PATH}`, TMPDIR: dir };
+  /** Runs it, and takes the whole tree down if it never gets as far as stopping the hub it starts. */
+  const collect = (child: ChildProcess, kill: (pid: number) => void) => {
+    let out = "";
+    child.stdout?.on("data", (chunk) => (out += chunk));
+    child.stderr?.on("data", (chunk) => (out += chunk));
+    const limit = setTimeout(() => child.pid && kill(child.pid), 60_000);
+    const code = new Promise<number | null>((resolve) => child.once("close", resolve));
+    return code.then((status) => {
+      clearTimeout(limit);
+      return { code: status, out };
+    });
+  };
+  if (process.platform === "win32") {
+    // The tutorial is bash; on Windows a reader pastes the same lines into PowerShell. The CLI shim is a .cmd, the way
+    // npm installs one there.
+    writeFileSync(
+      join(bin, "agent-autoloop.cmd"),
+      `@ECHO off\r\n"${process.execPath}" --disable-warning=ExperimentalWarning "${CLI}" %*\r\n`,
+    );
+    const child = spawn(windowsShell(), ["-NoProfile", "-NonInteractive", "-Command", script], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    return collect(child, (pid) =>
+      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }),
+    );
+  }
   const shim = join(bin, "agent-autoloop");
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" --disable-warning=ExperimentalWarning "${CLI}" "$@"\n`);
   chmodSync(shim, 0o755);
-  const port = await freePort();
-  const script = block.replaceAll("~/.agent-autoloop/app", ROOT).replaceAll(String(oldPort), String(port));
   const child = spawn("sh", ["-c", script], {
     cwd: ROOT,
     detached: true,
-    env: { ...cleanEnv(), PATH: `${bin}:${process.env.PATH}`, SHELL: "/bin/sh", TMPDIR: dir },
+    env: { ...env, SHELL: "/bin/sh" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let out = "";
-  child.stdout.on("data", (chunk) => (out += chunk));
-  child.stderr.on("data", (chunk) => (out += chunk));
-  // The block starts a hub of its own in the background: if it never gets as far as stopping it, the group goes.
-  const limit = setTimeout(() => process.kill(-child.pid!, "SIGKILL"), 60_000);
-  const code = await new Promise((resolve) => child.once("close", resolve));
-  clearTimeout(limit);
-  return { code, out };
+  return collect(child, (pid) => process.kill(-pid, "SIGKILL"));
 }
 
 test("the tutorial's first block runs all three examples as written", async () => {

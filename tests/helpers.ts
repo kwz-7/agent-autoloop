@@ -2,13 +2,14 @@
 // the environment they read.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { after } from "node:test";
 
 export function setup(name: string, rules = "rules.fixture.json") {
   const directory = mkdtempSync(join(tmpdir(), `agent-autoloop-${name}-`));
   process.env.AGENT_AUTOLOOP_HOME = directory;
-  process.env.AGENT_AUTOLOOP_RULES = rules.startsWith("/") ? rules : join(import.meta.dirname, rules);
+  // A rules path written out in full is used as it is: a leading slash only says that on POSIX, not a drive letter on Windows.
+  process.env.AGENT_AUTOLOOP_RULES = isAbsolute(rules) ? rules : join(import.meta.dirname, rules);
   process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
   after(() => {
     try {

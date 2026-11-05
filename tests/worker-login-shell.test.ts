@@ -1,11 +1,15 @@
 // Failure modes: an owner whose login shell isn't POSIX (fish) can't start any agent because the worker's command for
 // that shell doesn't parse there, or making it parse lets the install path or an argument run as shell source.
+// Windows has no login shell to start an agent under: the worker starts it directly with the environment it inherited
+// (worker/worker.ts, agentEnvironment), so there is no SHELL, no `sh -l` and no fish for this file to test.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+
+if (process.platform === "win32") process.exit(0);
 
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-login-shell-"));
 const home = join(scratch, "quote' $(touch path-injected)");
@@ -17,9 +21,6 @@ process.env.HOME = scratch;
 process.env.XDG_CONFIG_HOME = join(scratch, "config");
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const { createWorker } = await import("../worker/worker.ts");
-
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
 
 // CI has no fish, so this keeps the two things about it that matter: no $0 or $@, and no arguments reach the command.
 const standIn = join(scratch, "not-posix-shell");

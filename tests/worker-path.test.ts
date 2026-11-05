@@ -1,22 +1,27 @@
 // Failure modes: characters in the install path execute as shell source, command arguments are re-parsed,
 // or the worker cannot recover the result from a directory containing quotes and command substitutions.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-// What is under test is the shell wrapper, and Windows has no shell to wrap: it starts the agent directly.
-if (process.platform === "win32") process.exit(0);
-
+const windows = process.platform === "win32";
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-worker-path-"));
 const home = join(scratch, "quote' $(touch path-injected)");
 const project = join(scratch, "project");
 mkdirSync(project);
 process.env.AGENT_AUTOLOOP_HOME = home;
-process.env.SHELL = "/bin/sh";
+if (!windows) process.env.SHELL = "/bin/sh";
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const { createWorker } = await import("../worker/worker.ts");
+
+// The POSIX worker quotes the command into a login shell's script. Windows has no shell wrapper: it writes the argv to a
+// plan file and starts it directly, so the same characters have to survive JSON and argv instead.
+const argument = "literal $(touch argv-injected)";
+const command = windows
+  ? [process.execPath, "-e", "console.log(process.argv[1]); console.error(process.env.AGENT_AUTOLOOP_HOME)", argument]
+  : ["echo", argument];
 
 test("install paths and command arguments stay literal through the worker wrapper", async () => {
   const results: any[] = [];
@@ -33,7 +38,7 @@ test("install paths and command arguments stay literal through the worker wrappe
       name: "Agent",
       use: "command",
       access: "edit",
-      command: ["echo", "literal $(touch argv-injected)"],
+      command,
     },
     context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
   };
@@ -59,6 +64,9 @@ test("install paths and command arguments stay literal through the worker wrappe
   }
   assert.ok(!existsSync(join(project, "path-injected")), "the install path executed a command");
   assert.ok(!existsSync(join(project, "argv-injected")), "an argument executed a command");
-  assert.equal(results[0]?.summary, "literal $(touch argv-injected)");
+  assert.equal(results[0]?.summary, argument);
   assert.equal(results[0]?.outcome, "done");
+  // The agent is also given AGENT_AUTOLOOP_HOME: the path with the quote and the command substitution in it has to reach it
+  // as one argument, not as something evaluated on the way.
+  if (windows) assert.equal(readFileSync(join(home, "worker", "runs", "1-1", "stderr-1.log"), "utf8").trim(), home);
 });

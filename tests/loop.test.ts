@@ -8,7 +8,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -24,27 +23,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
-
+const windows = process.platform === "win32";
 const home = mkdtempSync(join(tmpdir(), "agent-autoloop-loop-"));
 const bin = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
-// `init` turns on the desktop channel: these stand in for the commands that would really show something.
+// `init` turns on the desktop channel: these stand in for the commands that would really show something. On Windows the
+// notifier is PowerShell, and a `.cmd` first on PATH takes its place the way a fake `osascript` does elsewhere.
 const notifiers = join(home, "notifiers");
 const notified = join(home, "notified.txt");
 const notifications = () => (existsSync(notified) ? readFileSync(notified, "utf8").trim().split("\n") : []);
 mkdirSync(notifiers);
-writeFileSync(join(notifiers, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-for (const name of ["osascript", "notify-send"]) {
-  const recordTitle = `while [ "$1" != "--" ]; do shift; done\nprintf '%s\\n' "$3" >> "${notified}"\n`;
-  writeFileSync(join(notifiers, name), `#!/bin/sh\n${recordTitle}`);
-  chmodSync(join(notifiers, name), 0o755);
+if (windows) {
+  writeFileSync(join(notifiers, "powershell.cmd"), `@echo off\r\n@"%dp0%\\powershell.js" %*\r\n`);
+  // Whatever is shown is the last argument: a balloon's body carries the card's title and the line under it.
+  writeFileSync(
+    join(notifiers, "powershell.js"),
+    `require("node:fs").appendFileSync(${JSON.stringify(notified)}, process.argv.slice(2).at(-1) + "\\n");\n`,
+  );
+} else {
+  writeFileSync(join(notifiers, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  for (const name of ["osascript", "notify-send"]) {
+    const recordTitle = `while [ "$1" != "--" ]; do shift; done\nprintf '%s\\n' "$3" >> "${notified}"\n`;
+    writeFileSync(join(notifiers, name), `#!/bin/sh\n${recordTitle}`, { mode: 0o755 });
+  }
 }
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   AGENT_AUTOLOOP_HOME: home,
-  DISPLAY: ":99",
-  PATH: `${notifiers}:${process.env.PATH}`,
+  PATH: `${notifiers}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+  ...(windows ? {} : { DISPLAY: ":99" }),
 };
 delete env.AGENT_AUTOLOOP_RULES;
 delete env.AGENT_AUTOLOOP_PUBLIC_URL;
@@ -65,34 +71,22 @@ const freePort = () =>
   });
 
 const fence = "```";
-const script = join(home, "agent.sh");
-writeFileSync(
-  script,
-  `#!/bin/sh
-# Asks on its first go; with an answer in the context file, finishes. Asked to, it only says something.
-if grep -q 'card.answered' "$AGENT_AUTOLOOP_CONTEXT"; then
-  echo "你选了绿色，做完了"
-elif grep -q 'hello.notice' "$AGENT_AUTOLOOP_CONTEXT"; then
-  cat <<'END'
-说了一声
-
-${fence}agent-autoloop
-{"notice":[{"title":"留意一下","text":"磁盘快满了","key":"disk"}]}
-${fence}
-END
-else
-  pwd > "${home}/where.txt"
-  cat <<'END'
-问了一个问题
-
-${fence}agent-autoloop
-{"ask":[{"title":"试跑：选一个颜色","text":"选哪个都行","options":["蓝色","绿色"],"recommend":1,"key":"color"}]}
-${fence}
-END
-fi
-`,
-);
-chmodSync(script, 0o755);
+// Asks on its first go; with an answer in the context file, finishes. Asked to, it only says something. A `.js` file with a
+// shebang: POSIX starts it from that line, Windows through node, which is what `host/programs.ts` turns a `.js` into.
+const script = join(home, "agent.js");
+const agentBody = `const fs = require("node:fs");
+const context = fs.readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT, "utf8");
+const block = (payload) => "\\n\\n" + ${JSON.stringify(fence)} + "agent-autoloop\\n" + JSON.stringify(payload) + "\\n" + ${JSON.stringify(fence)};
+if (context.includes("card.answered")) {
+  console.log("你选了绿色，做完了");
+} else if (context.includes("hello.notice")) {
+  console.log("说了一声" + block({ notice: [{ title: "留意一下", text: "磁盘快满了", key: "disk" }] }));
+} else {
+  fs.writeFileSync(${JSON.stringify(join(home, "where.txt"))}, process.cwd() + "\\n");
+  console.log("问了一个问题" + block({ ask: [{ title: "试跑：选一个颜色", text: "选哪个都行", options: ["蓝色", "绿色"], recommend: 1, key: "color" }] }));
+}
+`;
+writeFileSync(script, `#!${process.execPath}\n${agentBody}`, { mode: 0o755 });
 
 let up: ReturnType<typeof spawn> | undefined;
 after(async () => {
@@ -107,7 +101,12 @@ test("one machine, one command: an event, a question, an answer, the work done",
   const port = await freePort();
   const done = cli("init", "--no-service", "--command", script, "--port", String(port));
   assert.equal(done.status, 0, done.stderr);
-  assert.equal(statSync(join(home, "config.json")).mode & 0o777, 0o600, "its keys are private");
+  if (windows) {
+    const acl = spawnSync("icacls", [join(home, "config.json")], { encoding: "utf8" }).stdout;
+    assert.doesNotMatch(acl, /Everyone|BUILTIN\\\\Users|Authenticated Users/, "its keys are private");
+  } else {
+    assert.equal(statSync(join(home, "config.json")).mode & 0o777, 0o600, "its keys are private");
+  }
   assert.equal(cli("init", "--no-service").status, 1, "a second init doesn't overwrite the first");
   assert.equal(cli("check").status, 0);
   // Point the starter rule at something this test owns.
@@ -214,7 +213,8 @@ test("the user's Agents are shown how to set it up, when this is the install in 
   mkdirSync(join(person, ".claude"));
   mkdirSync(join(person, ".codex", "skills", "agent-autoloop"), { recursive: true });
   writeFileSync(join(person, ".codex", "skills", "agent-autoloop", "SKILL.md"), "their own");
-  const usual: NodeJS.ProcessEnv = { ...env, HOME: person };
+  // Windows takes the home directory from USERPROFILE; the other platforms from HOME.
+  const usual: NodeJS.ProcessEnv = { ...env, HOME: person, USERPROFILE: person };
   delete usual.AGENT_AUTOLOOP_HOME;
   const done = spawnSync(
     process.execPath,
@@ -226,7 +226,8 @@ test("the user's Agents are shown how to set it up, when this is the install in 
     realpathSync(join(person, ".claude", "skills", "agent-autoloop")),
     realpathSync(join(import.meta.dirname, "..", "skills", "agent-autoloop")),
   );
-  assert.ok(lstatSync(join(person, ".claude", "skills", "agent-autoloop")).isSymbolicLink());
+  // A link is a symlink where the platform has them and a junction on Windows, where it does not.
+  if (!windows) assert.ok(lstatSync(join(person, ".claude", "skills", "agent-autoloop")).isSymbolicLink());
   assert.equal(readFileSync(join(person, ".codex", "skills", "agent-autoloop", "SKILL.md"), "utf8"), "their own");
   assert.ok(existsSync(join(person, ".agent-autoloop", "config.json")));
   rmSync(person, { recursive: true, force: true });

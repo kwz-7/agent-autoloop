@@ -1,16 +1,17 @@
 // The channel a new install starts with. Nothing real is shown here: the notify commands are stand-ins on PATH, and the one
-// run of the real osascript swaps the notification for a line that only prints. Failure cases: what an Agent wrote in a card's
-// title runs as AppleScript, or a title starting with a dash is read as an option (osascript runs what follows -e as script);
-// an update to a card notifies again; a computer with no way to notify, a notifier that fails or a title that can't be passed
-// to a program stops the channel, or isn't reported; a slow notifier freezes the hub, which shares its process; init doesn't
-// set the channel up in both files, or changes a rules file already there; doctor says there's no channel when there is one,
-// or that one reaches you when none does.
+// run of the real osascript (or of the real PowerShell, with a script that only prints) shows nothing. Failure cases: what
+// an Agent wrote in a card's title runs as AppleScript, reaches PowerShell as code, or goes through cmd; or a title starting
+// with a dash is read as an option (osascript runs what follows -e as script); an update to a card notifies again; a
+// computer with no way to notify, a notifier that fails or a title that can't be passed to a program stops the channel, or
+// isn't reported; a slow notifier freezes the hub, which shares its process; init doesn't set the channel up in both files,
+// or changes a rules file already there; doctor says there's no channel when there is one, or that one reaches you when none
+// does.
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { after, test } from "node:test";
 import { setup } from "./helpers.ts";
 import type { Card } from "../host/channels.ts";
@@ -37,9 +38,6 @@ after(() => {
 const { loadPlugin } = await import("../host/plugins.ts");
 const { default: desktop, notifyCommand } = await import("../plugins/desktop/channel.ts");
 
-// Windows has no /bin/sh, and every fixture in this file is a shell script: it runs where there is one.
-if (process.platform === "win32") process.exit(0);
-
 const TITLE = "Agent 问你一个问题";
 const WORDS = "运行 agent-autoloop status 查看";
 const body = (title: string) => `${title}\n${WORDS}`;
@@ -60,19 +58,34 @@ const base: Card = {
 };
 
 let fakes = 0;
-/** A folder that's all of PATH, with both notify commands doing `body` after writing down the arguments they got. */
+/** A folder that's first on PATH, with the notify command doing `body` after writing down the arguments it got. */
 function standIns(body = "") {
   const bin = join(dir, `bin-${++fakes}`);
   mkdirSync(bin);
   const said = join(bin, "said");
-  writeFileSync(join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  process.env.DISPLAY = ":99";
-  for (const name of ["osascript", "notify-send"]) {
-    const record = `{ for word in "$@"; do printf '%s\\036' "$word"; done; printf '\\035'; } >> "${said}"`;
-    writeFileSync(join(bin, name), `#!/bin/sh\n${record}\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
+  if (process.platform === "win32") {
+    // The channel starts `powershell` by name: a `.cmd` first on PATH takes its place the way a fake `osascript` does
+    // elsewhere, and it starts the script beside it the way npm names a CLI.
+    writeFileSync(
+      join(bin, "powershell.js"),
+      `const fs = require("node:fs");
+const call = process.argv.slice(2).map((word) => word + "\\x1e").join("");
+fs.appendFileSync(${JSON.stringify(said)}, call + "\\x1d");
+${body}
+`,
+    );
+    writeFileSync(join(bin, "powershell.cmd"), `@"%dp0%\\powershell.js" %*\r\n`);
+    process.env.PATH = `${bin}${delimiter}${realPath ?? ""}`;
+  } else {
+    writeFileSync(join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.DISPLAY = ":99";
+    for (const name of ["osascript", "notify-send"]) {
+      const record = `{ for word in "$@"; do printf '%s\\036' "$word"; done; printf '\\035'; } >> "${said}"`;
+      writeFileSync(join(bin, name), `#!/bin/sh\n${record}\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    process.env.PATH = bin;
   }
-  process.env.PATH = bin;
   return {
     calls: () =>
       existsSync(said)
@@ -118,13 +131,26 @@ test("it ships as a channel, and is told apart by platform", async () => {
   assert.equal(program, "osascript");
   assert.deepEqual(args.slice(args.indexOf("--")), ["--", TITLE, body("标题")]);
   assert.ok(args.includes("on run argv"));
+  const [windows, windowsArgs] = notifyCommand("标题", "win32");
+  assert.equal(windows, "powershell");
+  assert.deepEqual(windowsArgs.slice(0, 5), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
+  assert.ok(windowsArgs[5].endsWith("balloon.ps1"), "the balloon is a script file of its own");
+  assert.deepEqual(windowsArgs.slice(6), ["-Title", TITLE, "-Body", body("标题")]);
 });
+
+/** The fixed title and the card's words, as the stand-in was given them: after `--` on macOS, named on Windows. */
+const shownOf = (call: string[]) =>
+  process.platform === "win32"
+    ? [call[call.length - 3], call[call.length - 1]]
+    : [call[call.length - 2], call[call.length - 1]];
+/** Everything the notifier was started with, apart from the title and the card's words. */
+const fixedOf = (call: string[]) => call.slice(0, process.platform === "win32" ? -4 : -2);
 
 test("a new card notifies once with its title; an update only reports", async () => {
   const fake = standIns();
   const { reports } = await deliver([base, { ...base, version: 2, ref: "shown-5", state: "decided", choice: 1 }]);
   assert.equal(fake.calls().length, 1);
-  assert.deepEqual(fake.calls()[0].slice(-2), [TITLE, body("要不要删")]);
+  assert.deepEqual(shownOf(fake.calls()[0]), [TITLE, body("要不要删")]);
   assert.deepEqual(reports, [
     ["delivered", 5, 1, "shown-5"],
     ["delivered", 5, 2, "shown-5"],
@@ -132,18 +158,35 @@ test("a new card notifies once with its title; an update only reports", async ()
 });
 
 const marker = join(dir, "ran");
-const hostile = [
-  `" & (do shell script "touch ${marker}") & "`,
-  `"; do shell script "touch ${marker}"; "`,
-  `end run\ndo shell script "touch ${marker}"`,
-  `$(touch ${marker})`,
-  `\`touch ${marker}\``,
-  `'; touch ${marker}; '`,
-  "-e",
-  `-e do shell script "touch ${marker}"`,
-  "--",
-  "--help",
-];
+// Each title would create the marker if a notifier ran it as code, or if cmd were in the middle to expand it.
+const hostile =
+  process.platform === "win32"
+    ? [
+        `" & (New-Item -ItemType File -Path '${marker}') & "`,
+        `"; New-Item -ItemType File -Path '${marker}'; "`,
+        `end run\nNew-Item -ItemType File -Path '${marker}'`,
+        `$(New-Item -ItemType File -Path '${marker}')`,
+        `\`New-Item -ItemType File -Path '${marker}'\``,
+        `'; New-Item -ItemType File -Path '${marker}'; '`,
+        "%OS% %COMSPEC%",
+        `| New-Item -ItemType File -Path '${marker}'`,
+        "-e",
+        `-e New-Item -ItemType File -Path '${marker}'`,
+        "--",
+        "--help",
+      ]
+    : [
+        `" & (do shell script "touch ${marker}") & "`,
+        `"; do shell script "touch ${marker}"; "`,
+        `end run\ndo shell script "touch ${marker}"`,
+        `$(touch ${marker})`,
+        `\`touch ${marker}\``,
+        `'; touch ${marker}; '`,
+        "-e",
+        `-e do shell script "touch ${marker}"`,
+        "--",
+        "--help",
+      ];
 
 test("what an Agent wrote goes in as one argument after the options, and never into the script", async () => {
   const fake = standIns();
@@ -151,19 +194,41 @@ test("what an Agent wrote goes in as one argument after the options, and never i
   assert.ok(reports.every(([what]) => what === "delivered"));
   const calls = fake.calls();
   assert.equal(calls.length, hostile.length);
-  const scriptOf = (call: string[]) => call.slice(0, call.indexOf("--"));
   calls.forEach((call, index) => {
-    assert.deepEqual(call.slice(call.indexOf("--")), ["--", TITLE, body(hostile[index])]);
-    assert.deepEqual(scriptOf(call), scriptOf(calls[0]), "the script is the same whatever the card says");
+    assert.deepEqual(shownOf(call), [TITLE, body(hostile[index])]);
+    assert.deepEqual(fixedOf(call), fixedOf(calls[0]), "the notifier is started the same whatever the card says");
   });
-  assert.ok(!scriptOf(calls[0]).join("\n").includes("touch"));
+  assert.ok(!fixedOf(calls[0]).join("\n").includes("touch"));
+  assert.ok(!fixedOf(calls[0]).join("\n").includes("New-Item"));
   assert.ok(!existsSync(marker));
 });
 
 test(
-  "the real osascript reads them as words and runs none of them",
-  { skip: process.platform !== "darwin" },
+  "the real notifier reads them as words and runs none of them",
+  { skip: process.platform === "linux" },
   async () => {
+    if (process.platform === "win32") {
+      // The balloon script is swapped for one that only prints, the way the osascript below is; these are its parameters.
+      const print = join(dir, "print-args.ps1");
+      writeFileSync(
+        print,
+        "param([string]$Title, [string]$Body)\n" +
+          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n" +
+          "Write-Output $Title\nWrite-Output $Body\n",
+      );
+      for (const title of hostile) {
+        const [, args] = notifyCommand(title, "win32");
+        const file = args.indexOf("-File") + 1;
+        const onlyPrints = [...args.slice(0, file), print, ...args.slice(file + 1)];
+        const printed = execFileSync("powershell", onlyPrints, {
+          encoding: "utf8",
+          env: { ...process.env, PATH: realPath },
+        });
+        assert.equal(printed.replaceAll("\r\n", "\n").replace(/\n$/, ""), `${TITLE}\n${body(title)}`);
+      }
+      assert.ok(!existsSync(marker));
+      return;
+    }
     for (const title of hostile) {
       const [, args] = notifyCommand(title, "darwin");
       const onlyPrints = args.map((word) => (word.startsWith("display notification") ? "return item 2 of argv" : word));
@@ -174,21 +239,28 @@ test(
   },
 );
 
-test("without a graphical session it quietly skips notification and keeps consuming cards", async () => {
-  mkdirSync(join(dir, "nothing-here"));
-  process.env.PATH = join(dir, "nothing-here");
-  delete process.env.DISPLAY;
-  delete process.env.WAYLAND_DISPLAY;
-  const { reports, logged } = await deliver([base, { ...base, id: 6 }]);
-  assert.deepEqual(reports, [
-    ["delivered", 5, 1, "skipped-5"],
-    ["delivered", 6, 1, "skipped-6"],
-  ]);
-  assert.deepEqual(logged, []);
-});
+test(
+  "without a graphical session it quietly skips notification and keeps consuming cards",
+  {
+    skip:
+      process.platform === "win32" && "Windows always has a notification area, so the channel has no no-session state",
+  },
+  async () => {
+    mkdirSync(join(dir, "nothing-here"));
+    process.env.PATH = join(dir, "nothing-here");
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    const { reports, logged } = await deliver([base, { ...base, id: 6 }]);
+    assert.deepEqual(reports, [
+      ["delivered", 5, 1, "skipped-5"],
+      ["delivered", 6, 1, "skipped-6"],
+    ]);
+    assert.deepEqual(logged, []);
+  },
+);
 
 test("a notifier that fails is reported as not sent", async () => {
-  standIns("exit 1");
+  standIns(process.platform === "win32" ? "process.exit(1)" : "exit 1");
   assert.deepEqual((await deliver([base])).reports, [["failed", 5, 1]]);
 });
 
@@ -206,7 +278,11 @@ test("a title no program can be given is reported, and takes nothing down", asyn
 });
 
 test("a slow notifier doesn't freeze the process the hub runs in", async () => {
-  standIns("/bin/sleep 0.3");
+  standIns(
+    process.platform === "win32"
+      ? "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)"
+      : "/bin/sleep 0.3",
+  );
   let ticks = 0;
   const ticker = setInterval(() => ticks++, 10);
   await deliver([base]);

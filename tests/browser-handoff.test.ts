@@ -1,5 +1,6 @@
 // Failure modes: a task becomes shell syntax; a follow-up creates another browser session; an invalid URL or session
 // reaches the browser; a failed bridge is reported as success or retried; the recipe works only inside this repository.
+// Windows has no shell to run the entry with, so there it is a .js file and the launcher starts it with node.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -7,9 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-// The browser entry this file stands in for is a shell script, and Windows has no shell to run it with.
-if (process.platform === "win32") process.exit(0);
-
+const windows = process.platform === "win32";
 const root = mkdtempSync(join(tmpdir(), "autoloop-browser-template-"));
 after(() => rmSync(root, { recursive: true, force: true }));
 const session = "12345678-1234-1234-1234-123456789abc";
@@ -17,7 +16,8 @@ const session = "12345678-1234-1234-1234-123456789abc";
 function fixture() {
   const dir = mkdtempSync(join(root, "case-"));
   copyFileSync(join(import.meta.dirname, "../examples/recipes/browser-handoff/handoff.ts"), join(dir, "handoff.ts"));
-  const command = join(dir, "browser entry");
+  // A shebang script is what the POSIX recipe's entry is; Windows only starts a .js through node, which the launcher does.
+  const command = join(dir, windows ? "browser entry.js" : "browser entry");
   writeFileSync(
     command,
     `#!${process.execPath}
