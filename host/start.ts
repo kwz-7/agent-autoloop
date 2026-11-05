@@ -12,7 +12,9 @@ if (given) {
 }
 const home = process.env.AGENT_AUTOLOOP_HOME ?? path.join(homedir(), ".agent-autoloop");
 
-if (!process.stdout.isTTY) {
+// Started by the service, not by hand: the home came as an argument. A task has a console nobody can see, so what would
+// have been printed there is written down instead.
+if (given) {
   const logs = path.join(home, "logs");
   mkdirSync(logs, { recursive: true });
   const file = path.join(logs, "up.log");
