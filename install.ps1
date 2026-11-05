@@ -38,28 +38,31 @@ if (Test-Path (Join-Path $App ".git")) {
   & git clone --quiet --depth 1 --branch $Branch -- $Repo $App
 }
 
+# 临时 HOME（测试、CI）只装这一份，不动这台电脑的 PATH：命令给人用的是默认安装的事。
 # Only a folder that's on PATH makes `agent-autoloop` work, and an agent-autoloop that isn't this one is someone else's.
 $nodePath = (Get-Command node).Source
 $shim = "@echo off`r`n`"$nodePath`" --disable-warning=ExperimentalWarning `"$Program`" %*`r`n"
 $places = @((Join-Path $HOME ".local\bin")) + ($env:PATH -split ';' | Where-Object { $_ })
 $placed = $false
-foreach ($place in $places) {
-  if (-not (Test-Path $place -PathType Container)) {
-    if ($place -ne (Join-Path $HOME ".local\bin")) { continue }
-    New-Item -ItemType Directory -Force -Path $place | Out-Null
+if (-not $env:AGENT_AUTOLOOP_HOME) {
+  foreach ($place in $places) {
+    if (-not (Test-Path $place -PathType Container)) {
+      if ($place -ne (Join-Path $HOME ".local\bin")) { continue }
+      New-Item -ItemType Directory -Force -Path $place | Out-Null
+    }
+    $file = Join-Path $place "agent-autoloop.cmd"
+    if (Test-Path $file) {
+      if (-not (Select-String -Path $file -SimpleMatch $Program -Quiet)) { continue }
+      Set-Content -Path $file -Value $shim -Encoding ascii
+      $placed = $true
+      break
+    }
+    try {
+      Set-Content -Path $file -Value $shim -Encoding ascii -ErrorAction Stop
+      $placed = $true
+      break
+    } catch { continue }
   }
-  $file = Join-Path $place "agent-autoloop.cmd"
-  if (Test-Path $file) {
-    if (-not (Select-String -Path $file -SimpleMatch $Program -Quiet)) { continue }
-    Set-Content -Path $file -Value $shim -Encoding ascii
-    $placed = $true
-    break
-  }
-  try {
-    Set-Content -Path $file -Value $shim -Encoding ascii -ErrorAction Stop
-    $placed = $true
-    break
-  } catch { continue }
 }
 
 if (Test-Path (Join-Path $Root "config.json")) {
@@ -70,7 +73,9 @@ if (Test-Path (Join-Path $Root "config.json")) {
 }
 
 $onPath = Get-Command agent-autoloop -ErrorAction SilentlyContinue
-if (-not $onPath -or $onPath.Source -notlike "*.cmd") {
+if ($env:AGENT_AUTOLOOP_HOME) {
+  # 临时 HOME 不往 PATH 里放东西，也就没有要提醒的。
+} elseif (-not $onPath -or $onPath.Source -notlike "*.cmd") {
   Write-Host ""
   Write-Host "直接打 agent-autoloop 运行不了这个程序：PATH 上没有能放它的目录。"
   Write-Host "把这一行加进 PowerShell 的 $PROFILE："
