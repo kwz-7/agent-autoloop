@@ -121,17 +121,12 @@ function linkSkill() {
 function howToRun() {
   if (process.platform === "win32") {
     const printed = spawnSync("where.exe", ["agent-autoloop"], { encoding: "utf8", windowsHide: true }).stdout ?? "";
-    const ours = printed
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .some((file) => {
-        try {
-          return readFileSync(file, "utf8").includes(PROGRAM);
-        } catch {
-          return false;
-        }
-      });
-    if (ours) return "agent-autoloop";
+    // A shell runs the first match it can start, so anything further down PATH doesn't make the name work.
+    const found = printed.split(/\r?\n/).filter(Boolean);
+    const first = found.find((file) => /\.(cmd|bat|exe|ps1)$/i.test(file)) ?? found[0];
+    try {
+      if (first && readFileSync(first, "utf8").includes(PROGRAM)) return "agent-autoloop";
+    } catch {}
   } else {
     const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout.trim();
     if (found && realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
@@ -534,7 +529,8 @@ function addPlugin(args: string[]) {
   const url = args[0] ?? fail("用法：agent-autoloop add <git 地址>");
   const name = url
     .replace(/\/$/, "")
-    .split(/[/:]/)
+    .replace(/\\$/, "")
+    .split(/[/:\\]/)
     .at(-1)!
     .replace(/\.git$/, "")
     .toLowerCase();

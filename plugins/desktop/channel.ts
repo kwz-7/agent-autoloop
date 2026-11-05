@@ -3,24 +3,15 @@
 //   "channels": { "desktop": { "key": "…" } } in config.json
 //   "channels": { "desktop": { "name": "桌面通知" } } in rules.json
 import { execFile, spawnSync } from "node:child_process";
+import path from "node:path";
+import { resolveProgram } from "../../host/programs.ts";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
-/** In a single-quoted PowerShell string nothing is expanded; only a quote itself has to be doubled. */
-const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
 /** A balloon tip from the notification area: the one thing a logged-in Windows session always has. */
-const balloon = (title: string, body: string) =>
-  [
-    "Add-Type -AssemblyName System.Windows.Forms",
-    "$n = New-Object System.Windows.Forms.NotifyIcon",
-    "$n.Icon = [System.Drawing.SystemIcons]::Information",
-    "$n.Visible = $true",
-    `$n.ShowBalloonTip(5000, ${literal(title)}, ${literal(body)}, 'Info')`,
-    "Start-Sleep -Milliseconds 5000",
-    "$n.Dispose()",
-  ].join("; ");
+const BALLOON = path.join(import.meta.dirname, "balloon.ps1");
 
 /**
  * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
@@ -29,8 +20,13 @@ const balloon = (title: string, body: string) =>
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
-  // PowerShell has no arguments of its own after `-Command`: the title is quoted into the script instead.
-  if (platform === "win32") return ["powershell", ["-NoProfile", "-NonInteractive", "-Command", balloon(TITLE, body)]];
+  // PowerShell has no arguments of its own after `-Command`, so the balloon is a script file taking the two as arguments.
+  // They are named because a positional body starting with `-` would be read as a parameter name and dropped.
+  if (platform === "win32")
+    return [
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", BALLOON, "-Title", TITLE, "-Body", body],
+    ];
   return ["notify-send", ["--", TITLE, body]];
 }
 
@@ -45,8 +41,10 @@ function hasDesktop() {
 /** Not the sync call the other channels get away with: this runs in the hub's own process, and may wait on a dialog. */
 function show(title: string) {
   const [program, args] = notifyCommand(title);
+  // Windows starts a `.cmd` shim through cmd and a `.js` through node, so the notifier is looked up like any other program.
+  const [lead, ...prefix] = resolveProgram(program);
   return new Promise<void>((resolve, reject) => {
-    execFile(program, args, { timeout: 30_000 }, (error) => (error ? reject(error) : resolve()));
+    execFile(lead, [...prefix, ...args], { timeout: 30_000 }, (error) => (error ? reject(error) : resolve()));
   });
 }
 

@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
+import { resolveProgram } from "../host/programs.ts";
 import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
@@ -229,6 +230,8 @@ export function createWorker({
     // Windows: an npm shim is a .cmd, and nothing spawns one without a shell in between, so the real program is what gets
     // started. The plan waits in a file because a prompt can be long and a command line on Windows can hold 32767.
     if (WINDOWS) {
+      const [first = ""] = argv;
+      const start = !first || /[\\/]/.test(first) ? argv.slice(0, 1) : resolveProgram(first);
       const plan = {
         out,
         err,
@@ -236,7 +239,7 @@ export function createWorker({
         beat: beatFile(entry.dir, entry.turn),
         stop: stopFile(entry.dir, entry.turn),
         cwd,
-        argv,
+        argv: [...start, ...argv.slice(1)],
       };
       writeFileSync(command, JSON.stringify(plan), { mode: 0o600 });
       entry.pid = spawnRunner(command, agentEnvironment(entry));

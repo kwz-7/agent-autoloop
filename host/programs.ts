@@ -13,9 +13,10 @@ export function findOnPath(name: string): string | null {
       timeout: 15_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    // `where` also lists the extension-less shell script npm writes for Git Bash, which nothing here can start.
+    // `where` also lists the extension-less shell script npm writes for Git Bash, which nothing here can start. The
+    // first one PATH offers that can be started wins, the way it would anywhere else.
     const found = printed.trim().split(/\r?\n/).filter(Boolean);
-    const program = found.find((file) => /\.exe$/i.test(file)) ?? found.find((file) => /\.(cmd|bat)$/i.test(file));
+    const program = found.find((file) => /\.(exe|cmd|bat)$/i.test(file));
     return program ? throughShim(program) : null;
   } catch {
     return null;
@@ -40,10 +41,29 @@ function throughShim(file: string): string {
 /** A command line for a name on PATH: the program, and whatever has to lead it before its own arguments. */
 export function resolveProgram(name: string): string[] {
   if (process.platform !== "win32") return [name];
-  const found = findOnPath(name);
+  const found = isPath(name) ? (existsSync(name) ? name : null) : (findOnPath(name) ?? fileOrNull(name));
   if (!found) return [name];
   if (/\.(cmd|bat)$/i.test(found)) return [process.env.COMSPEC ?? "cmd.exe", "/d", "/s", "/c", found];
   // A script npm installed is run by node, which is what the shim it came with would have done.
   if (/\.(c|m)?js$/i.test(found)) return [process.execPath, found];
+  // A script that names node in its first line: Windows starts nothing on a shebang, node runs it instead.
+  if (/^#!.*\bnode\b/.test(head(found))) return [process.execPath, found];
   return [found];
+}
+
+/** A name written as a path is a file to start, not something to look up. */
+function isPath(name: string): boolean {
+  return path.isAbsolute(name) || /[\\/]/.test(name);
+}
+
+function fileOrNull(name: string): string | null {
+  return existsSync(name) ? name : null;
+}
+
+function head(file: string): string {
+  try {
+    return readFileSync(file, "utf8").slice(0, 200);
+  } catch {
+    return "";
+  }
 }

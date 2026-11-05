@@ -20,7 +20,7 @@ Windows 上在 PowerShell 里运行同样的安装器，换成 `install.ps1`；�
 irm https://raw.githubusercontent.com/kwz-7/agent-autoloop/windows-native/install.ps1 | iex
 ```
 
-`install.ps1` 不写 `~/.local/bin` 这种 Unix 路径：它把 `agent-autoloop.cmd` 放进 `%USERPROFILE%\.local\bin`，那是这台电脑上第一个能写、又在 PATH 里的目录。
+`install.ps1` 不写 `~/.local/bin` 这种 Unix 路径：命令优先放进 PATH 里的 `%USERPROFILE%\.local\bin`，否则选 PATH 里第一个可写目录，不覆盖其他程序；没有位置时使用安装器打印的完整路径。
 
 GitHub Issue 轮询和 PR 交付等功能另需已登录的 `gh`，按对应场景说明配置；运行 Agent 也仍需该 Agent 自己的登录或授权。
 

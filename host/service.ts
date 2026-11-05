@@ -78,8 +78,9 @@ const taskFile = () => path.join(HOME, "service.xml");
 const account = () => `${process.env.USERDOMAIN ?? ""}\\${process.env.USERNAME ?? ""}`;
 
 /**
- * A scheduled task that starts at logon. `PT0S` removes the 72-hour limit a task has by default, which would otherwise
- * end the hub on the third day; `IgnoreNew` is what keeps a second copy from starting.
+ * A scheduled task that starts at logon and is asked again every minute: `IgnoreNew` makes the minute's ask a no-op
+ * while the hub is up, and the one that starts it again when it isn't. `PT0S` removes the 72-hour limit a task has by
+ * default, which would otherwise end the hub on the third day.
  */
 export function taskXml(options: UnitOptions = { home: HOME, executable: process.execPath, program: PROGRAM }) {
   const arguments_ = ["--disable-warning=ExperimentalWarning", START, options.home, "up"]
@@ -88,7 +89,7 @@ export function taskXml(options: UnitOptions = { home: HOME, executable: process
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Agent 自动化中台</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xml(account())}</UserId></LogonTrigger></Triggers>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xml(account())}</UserId></LogonTrigger><TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>${xml(account())}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -104,7 +105,6 @@ export function taskXml(options: UnitOptions = { home: HOME, executable: process
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
-    <RestartOnFailure><Interval>PT1M</Interval><Count>10</Count></RestartOnFailure>
   </Settings>
   <Actions Context="Author"><Exec>
     <Command>${xml(options.executable)}</Command>

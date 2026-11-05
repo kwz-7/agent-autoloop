@@ -1,4 +1,4 @@
-# Installs Agent 自动化中台 on Windows: a clone in %USERPROFILE%\.agent-autoloop\app, with nothing to build and nothing
+﻿# Installs Agent 自动化中台 on Windows: a clone in %USERPROFILE%\.agent-autoloop\app, with nothing to build and nothing
 # else to install. The counterpart of install.sh, and it does the same three things: clone, make the command reachable,
 # and hand over to `init`.
 $ErrorActionPreference = "Stop"
@@ -42,24 +42,26 @@ if (Test-Path (Join-Path $App ".git")) {
 # Only a folder that's on PATH makes `agent-autoloop` work, and an agent-autoloop that isn't this one is someone else's.
 $nodePath = (Get-Command node).Source
 $shim = "@echo off`r`n`"$nodePath`" --disable-warning=ExperimentalWarning `"$Program`" %*`r`n"
-$places = @((Join-Path $HOME ".local\bin")) + ($env:PATH -split ';' | Where-Object { $_ })
-$placed = $false
+$local = Join-Path $HOME ".local\bin"
+$onPath = @($env:PATH -split ';' | Where-Object { $_ })
+$places = @($local) + $onPath
 if (-not $env:AGENT_AUTOLOOP_HOME) {
   foreach ($place in $places) {
+    # A folder the shell won't look in is no place for the command; a relative one would mean wherever someone happens to be.
+    if (-not [System.IO.Path]::IsPathRooted($place)) { continue }
+    if ($onPath -notcontains $place) { continue }
     if (-not (Test-Path $place -PathType Container)) {
-      if ($place -ne (Join-Path $HOME ".local\bin")) { continue }
+      if ($place -ne $local) { continue }
       New-Item -ItemType Directory -Force -Path $place | Out-Null
     }
     $file = Join-Path $place "agent-autoloop.cmd"
     if (Test-Path $file) {
       if (-not (Select-String -Path $file -SimpleMatch $Program -Quiet)) { continue }
       Set-Content -Path $file -Value $shim -Encoding ascii
-      $placed = $true
       break
     }
     try {
       Set-Content -Path $file -Value $shim -Encoding ascii -ErrorAction Stop
-      $placed = $true
       break
     } catch { continue }
   }
@@ -73,13 +75,16 @@ if (Test-Path (Join-Path $Root "config.json")) {
 }
 
 $onPath = Get-Command agent-autoloop -ErrorAction SilentlyContinue
+# The name works only when what a shell would run is this program: an earlier agent-autoloop of someone else's comes first.
+$ours = $false
+if ($onPath) {
+  try { $ours = [bool](Select-String -Path $onPath.Source -SimpleMatch $Program -Quiet) } catch { $ours = $false }
+}
 if ($env:AGENT_AUTOLOOP_HOME) {
   # 临时 HOME 不往 PATH 里放东西，也就没有要提醒的。
-} elseif (-not $onPath -or $onPath.Source -notlike "*.cmd") {
+} elseif (-not $ours) {
   Write-Host ""
-  Write-Host "直接打 agent-autoloop 运行不了这个程序：PATH 上没有能放它的目录。"
-  Write-Host "把这一行加进 PowerShell 的 $PROFILE："
+  Write-Host "直接打 agent-autoloop 运行不了这个程序：PATH 上没有能放它的目录，或者排在前面的是另一个同名程序。"
+  Write-Host "要写完整路径 $Program，或者把这一行加进 PowerShell 的 $PROFILE："
   Write-Host "  function agent-autoloop { & `"$nodePath`" `"$Program`" @args }"
-} elseif ($placed -and $onPath.Source -ne (Join-Path $places[0] "agent-autoloop.cmd")) {
-  Write-Host "装好了，但 PATH 上排在前面的是另一个 agent-autoloop，用它之前先确认那是这个。"
 }
