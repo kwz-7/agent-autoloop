@@ -22,7 +22,13 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 Works on macOS, Windows, and Linux. You need Node 24, Git, and at least one command-line agent already signed in; no GitHub account required. You can also hand the [installation guide](INSTALL.md) to your agent and let it install everything for you.
 
-> **The Windows version lives on this branch.** Installing, starting, the scheduled service, desktop notifications, and uninstalling all use the Windows way of doing it (Task Scheduler, `icacls`, `taskkill`); see the [Windows section of the installation guide](INSTALL.md#windows).
+> **This branch is the Windows-native port.** It runs without WSL and uses what Windows already ships: Task Scheduler instead of `launchd`/`systemd`, a Windows Toast (`plugins/desktop/toast.ps1`) instead of `osascript`/`notify-send`, and `stop` files plus `taskkill` instead of signals (`worker/win.ts`). Install, the service, notifications, and uninstalling all follow the Windows way; see the [Windows section of the installation guide](INSTALL.md#windows). Two behaviours are different on purpose: stopping waits for the turn to wind down before killing the tree, and long prompts go through stdin because a Windows command line caps at 32767 characters.
+
+```powershell
+irm https://raw.githubusercontent.com/kwz-7/agent-autoloop/windows-native/install.ps1 | iex
+```
+
+On macOS and Linux, use the upstream installer instead:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh

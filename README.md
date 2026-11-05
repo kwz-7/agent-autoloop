@@ -1,36 +1,41 @@
-# Agent Autoloop
+# Agent Autoloop（Windows 原生版）
 
 **让你的命令行 Agent 在后台自己接活、自己跟进到底；平时不烦你，遇到拿不准的事才发卡片找你拍板。**
 
 **中文** | [English](README.en.md)
 
-[上手](#上手) · [场景模板](#拿来即用的场景模板) · [插件](#插件体系四个方向都能自由替换) · [内核](#内核的四个机制) · [文档](#更多文档)
+[这个分支是什么](#这个分支是什么) · [上手](#上手) · [Windows 差异](#windows-上不一样的地方) · [场景模板](#拿来即用的场景模板) · [插件](#插件体系四个方向都能自由替换) · [内核](#内核的四个机制) · [文档](#更多文档)
 
 ![架构图](docs/architecture.svg)
 
-## 它解决什么问题？
+## 这个分支是什么？
 
-平时我们用 Claude Code、Codex 这类命令行 Agent，大多是“人守着终端用”：你输一句话，盯着它跑，等它问你下一步；一旦关掉窗口或者人走开，事情就断了。
+上游的 `main` 是 macOS / Linux 版。这个 `windows-native` 分支把它搬到了 **Windows 原生**上：不装 WSL，不装 MSYS2，PowerShell 里一条命令就能跑。Windows 上原本用不到的那几样东西，都换成了系统自带的方案：
 
-**Agent Autoloop** 是一个极轻量的自动化中台。它把任务调度做成一个零外部依赖的**内核**，把事件来源、Agent、通知通道，甚至代码上线流水线全部拆成可随时插拔的**插件**。
+| 要做的事      | 原来（macOS / Linux）       | 这个分支（Windows）                                                                |
+| ------------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| 开机自启      | `launchd` / `systemd`       | 任务计划程序里的一个任务 `agent-autoloop`，登录时启动，不弹窗                      |
+| 安装          | `install.sh`                | [`install.ps1`](install.ps1)，克隆到 `%USERPROFILE%\.agent-autoloop`               |
+| 弹通知        | `osascript` / `notify-send` | [`plugins/desktop/toast.ps1`](plugins/desktop/toast.ps1)，Windows Toast            |
+| 停掉一轮      | 给进程组发信号              | `stop` 文件加心跳文件，超时才 `taskkill /T /F`（[`worker/win.ts`](worker/win.ts)） |
+| 长提示词      | 走参数                      | 命令行有 32767 字符上限，超长的改走标准输入（程序自己处理）                        |
+| `claude` 命令 | 一个可执行文件              | npm 装出来的是 `claude.cmd`，程序找到它真正指向的文件再启动，不经过 `cmd.exe`      |
 
-- **一台电脑、一条命令就能跑。** 装在你的 Mac、Windows 或 Linux 上，不用买云服务器，也不用开放公网端口。
-- **一行配置接新 Agent。** 不需要 SDK，也不需要改 Agent 源码，能接收提示词并打印最后一条回复的命令行工具都能接。
-- **没有后台界面。** 需要你拍板时把卡片推到飞书、钉钉、企微、Slack、Discord 或桌面通知；想看全局进展，敲一行命令。
+因此这个分支要装的东西只有三样：**Node 24、Git、一个你已经登录好的命令行 Agent**。没有运行时依赖，`package.json` 里不写 `dependencies`。
 
 ## 上手
 
-支持 macOS、Windows 和 Linux。运行前需要装好 Node 24、Git，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
+在 PowerShell 里跑：
 
-> **Windows 版在这个分支上。** 安装、启动、定时服务、桌面通知和卸载都换成了 Windows 的做法（任务计划、`icacls`、`taskkill`），装法见[安装说明的 Windows 一节](INSTALL.md#windows)。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
+```powershell
+irm https://raw.githubusercontent.com/kwz-7/agent-autoloop/windows-native/install.ps1 | iex
 ```
 
-装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
+它做三件事：把仓库克隆到 `%USERPROFILE%\.agent-autoloop\app`、把 `agent-autoloop` 命令放进 PATH（优先 `%USERPROFILE%\.local\bin`，否则 PATH 里第一个可写目录）、然后交给 `init` 装好配置和服务。
 
-```bash
+装好以后用你本机的 Agent 真实走一遍"提问 → 退出等回复 → 拍板 → 接着干完"：
+
+```powershell
 agent-autoloop try
 ```
 
@@ -49,7 +54,25 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 答完运行 agent-autoloop status，能看到它接着把活干完。
 ```
 
-交互终端里直接输入数字回车；非交互终端运行 `agent-autoloop answer 1 2` 选择“绿色”。再跑 `agent-autoloop status`，就能看到它接上刚才的会话并显示“你选了绿色，试跑通过”，还有今天和最近 7 天的轮数、Token 和费用（[统计口径](skills/agent-autoloop/SKILL.md#看情况回答)）。
+交互终端里直接输入数字回车；非交互终端运行 `agent-autoloop answer 1 2` 选择"绿色"。再跑 `agent-autoloop status`，就能看到它接上刚才的会话并显示"你选了绿色，试跑通过"，还有今天和最近 7 天的轮数、Token 和费用（[统计口径](skills/agent-autoloop/SKILL.md#看情况回答)）。
+
+## 装在哪、怎么开机自启、怎么卸
+
+| 东西     | 位置                                                                                  |
+| -------- | ------------------------------------------------------------------------------------- |
+| 程序     | `%USERPROFILE%\.agent-autoloop\app`                                                   |
+| 配置记录 | `%USERPROFILE%\.agent-autoloop`（规则、数据库、日志、插件）                           |
+| 命令     | PATH 里的 `agent-autoloop.cmd`                                                        |
+| 后台服务 | 任务计划程序里的 `agent-autoloop` 任务；设了 `AGENT_AUTOLOOP_HOME` 时任务名带一格哈希 |
+
+```powershell
+agent-autoloop service install     # 装成开机自启；init 通常已经装过
+agent-autoloop doctor              # 查哪里没配好
+agent-autoloop service remove      # 删掉任务计划里的服务
+agent-autoloop uninstall           # 卸载程序，保留配置和数据
+```
+
+`uninstall` 只删程序目录，`.agent-autoloop` 里的规则、会话和记录都留着，重新装回来接着用。
 
 ## 一件事怎么转起来
 
@@ -65,34 +88,19 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ## 日常怎么配？
 
-### 写一份规则（`rules.json`）
-
-不需要写胶水代码。打开 `~/.agent-autoloop/rules.json`，在 `rules` 里写清楚**什么事、交给谁、在哪个目录干**。`to` 填 `agents` 里已有的名字。比如每天早上 9 点写早报：
+不需要写胶水代码。打开 `%USERPROFILE%\.agent-autoloop\rules.json`，在 `rules` 里写清楚**什么事、交给谁、在哪个目录干**。`to` 填 `agents` 里已有的名字。比如每天早上 9 点写早报：
 
 ```json
 {
   "name": "早报",
   "when": { "cron": "0 9 * * *" },
-  "to": "codex",
-  "cwd": "~/notes",
+  "to": "claude",
+  "cwd": "D:\\notes",
   "prompt": "整理昨天的笔记和提交，写今天的早报。"
 }
 ```
 
-外部事件写法一样，只是要先接好来源。比如有人提新 Issue 时交给 Codex，先按[说明](skills/agent-autoloop/SKILL.md#接一个事件插件)在 `sources` 里登记 `github`：
-
-```json
-{
-  "name": "处理 issue",
-  "when": { "source": "github", "types": ["issues.opened"] },
-  "to": "codex",
-  "cwd": "~/code/app",
-  "skill": "handle-issue",
-  "parallel": 3
-}
-```
-
-保存后几秒内自动生效，可以运行 `agent-autoloop check` 检查。就算改错了，或者文件被删、读不到，系统也会继续按旧规则跑，并发卡片提醒你。
+Windows 的路径在 JSON 里要写双反斜杠 `\\`，用单引号 `'` 也行。保存后几秒内自动生效，可以运行 `agent-autoloop check` 检查。就算改错了，或者文件被删、读不到，系统也会继续按旧规则跑，并发卡片提醒你。
 
 ### Agent 怎么跟中台配合？
 
@@ -113,7 +121,16 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 ```
 ````
 
-除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。通告不需要回答，但结案时可以顺手写一句处理说明，这句话会留在卡片上。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效。接着旧会话跑也一样：会话接不上才开新的；接上了、干到一半断了，就算没跑成，过几分钟回到原会话重试，不开新会话重做。
+除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。通告不需要回答，但结案时可以顺手写一句处理说明，这句话会留在卡片上。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效。
+
+## Windows 上不一样的地方
+
+这几条都不是装坏了，是 Windows 没有对应的机制：
+
+- **停止靠等。** Windows 没有能交给对方处理的信号，程序只能被结束。中台收到 `stop` 后先让它自己收尾，10 秒没动静才结束整棵进程树（`taskkill /T /F`）。所以停下比 Mac 上慢一点，也可能丢掉还没写完的最后一行输出。
+- **命令行有长度上限。** Windows 一条命令最多 32767 个字符，很长的提示词改走标准输入，不用管。
+- **桌面通知是 Toast，不是气泡。** Windows 11 已经不再显示后台程序申请的托盘气泡，`toast.ps1` 用系统 PowerShell 的 AppID 发 Toast；开了专注助手或免打扰时它不会弹，飞书这种文字通道不受影响。
+- **CI 只跑 Linux 和 macOS。** 这个分支的行为测试在本地跑（`npm test`），Windows 专用的那部分在 [`tests/win-liveness.test.ts`](tests/win-liveness.test.ts)，覆盖心跳、`stop` 文件和进程树清理。
 
 ## 拿来即用的场景模板
 
@@ -129,7 +146,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 | [飞书周报与业务摘要](examples/recipes/feishu-brief/README.md) | 周日 18 点按你的权限读汇报和指定表格，生成本地摘要；飞书只发简短摘要，完整稿留在本机  |
 | [PR 自动交付](skills/agent-autoloop/SKILL.md#交付流水线)      | 打上 `deliver` 标签后，审查、等 CI、合并、等发布并核对线上版本                        |
 
-**启用：** 打开对应说明，把任务 Skill 放进所用 Agent 的 skills 目录，把示例规则合入 `~/.agent-autoloop/rules.json`，替换电脑名和路径，再运行 `agent-autoloop check`。
+**启用：** 打开对应说明，把任务 Skill 放进所用 Agent 的 skills 目录，把示例规则合入 `rules.json`，替换电脑名和路径，再运行 `agent-autoloop check`。
 
 反馈处理、网站巡检和飞书摘要默认使用北京时间，只发给本人的飞书私聊。样例数据都是虚构的；脚本和回执只用本地 HTTP 与假飞书 CLI 验证过，没有在真实账号上跑过完整业务。
 
@@ -143,10 +160,10 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | **事件**：怎么发现新活        | [GitHub Webhook](plugins/github/source.ts)、[GitLab Webhook](plugins/gitlab/source.ts)、[HTTP 接口](docs/protocol.md#来源把世界变成事件)、[定时规则](skills/agent-autoloop/SKILL.md#改规则)、[Issue 轮询脚本](examples/watch-github-issues.sh) | [说明](skills/agent-autoloop/SKILL.md#接一个事件插件) |
 | **Agent**：谁来干活           | [Claude Code](plugins/claude/agent.ts)、[Codex](plugins/codex/agent.ts)、[ACP](plugins/acp/agent.ts)、[通用命令](plugins/command/agent.ts)                                                                                                     | [说明](skills/agent-autoloop/SKILL.md#接一个-agent)   |
-| **通道**：去哪找你拍板        | [桌面通知](plugins/desktop/channel.ts)（默认开启）、[飞书](plugins/feishu/channel.ts)、[钉钉 / 企微 / Slack / Discord](plugins/webhook/templates.ts)                                                                                           | [说明](skills/agent-autoloop/SKILL.md#接一个通道)     |
+| **通道**：去哪找你拍板        | [桌面通知](plugins/desktop/channel.ts)（Windows 下是 Toast）、[飞书](plugins/feishu/channel.ts)、[钉钉 / 企微 / Slack / Discord](plugins/webhook/templates.ts)                                                                                 | [说明](skills/agent-autoloop/SKILL.md#接一个通道)     |
 | **交付**：把 CI/CD 也做成插件 | [`delivery`](plugins/delivery/delivery.ts)                                                                                                                                                                                                     | [说明](skills/agent-autoloop/SKILL.md#交付流水线)     |
 
-**实测情况：** Claude Code、Codex 和 ACP（官方 Codex ACP 适配器）跑通了多轮问答和跨进程会话续接；飞书跑通了发送、按钮回调和卡片更新；四种 Webhook 模板只在本地模拟服务上验证过，GitLab Webhook 按官方文档的格式测试，没连过真实 GitLab。这些文字通道靠回答链接拍板，要把 `hub.publicUrl` 配成手机或电脑能打开的地址。
+**实测情况：** 这个分支在 Windows 11 上跑通了 Claude Code 的多轮问答与跨进程会话续接、飞书发送与按钮回调、任务计划里的服务，以及 Toast 通知。Codex 和 ACP 只在上游 macOS 上验证过，没在 Windows 上逐个复测；四种 Webhook 模板只在本地模拟服务上验证过。
 
 **其他命令行 Agent 一行接入。** 设置 `use: "command"` 并传入命令数组，`{prompt}` 作为独立参数传递，不会被当成 shell 代码执行。下面的命令整理自各家官方文档，我们还没有逐个跑过：
 
@@ -174,7 +191,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ### 自己跑一遍
 
-在程序目录 `~/.agent-autoloop/app` 下运行：
+在程序目录 `%USERPROFILE%\.agent-autoloop\app` 下运行：
 
 | 验证什么                                                | 命令                              |
 | ------------------------------------------------------- | --------------------------------- |
@@ -193,7 +210,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ### 实测性能
 
-Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应答。`npm run benchmark` 的达标线按这台机器定，换台机器可能报未达标。
+下面这组数字是上游在 **Apple M5 Pro、24 GB、Node 24.21.0** 上测的，Windows 上没有单独跑过基准；换台机器可能报未达标。
 
 | 指标                         |          实测 |
 | ---------------------------- | ------------: |
@@ -217,7 +234,7 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 
 ## 更多文档
 
-- [安装说明](INSTALL.md)
+- [安装说明](INSTALL.md)（[Windows 一节](INSTALL.md#windows)）
 - [规则与交付流水线配置手册](skills/agent-autoloop/SKILL.md)
 - [如何编写插件](docs/plugins.md)
 - [完整通信协议](docs/protocol.md)
@@ -228,21 +245,21 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 <details>
 <summary><strong>仓库目录</strong></summary>
 
-| 位置                                                     | 放什么                                                                  |
-| -------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `kernel/`                                                | 内核：决策、事实日志、状态投影、到期任务、规则匹配、接口行为与卡片表单  |
-| `host/`                                                  | 运行外壳：Node HTTP、文件与 SQLite 连接、时钟、配置、后台服务和插件加载 |
-| `protocol/`                                              | 通信格式、JSON Schema、输入校验、HTTP 客户端和一致性检查                |
-| `worker/`                                                | 接单程序：领活、运行 Agent、心跳与停止、读取和提交回执                  |
-| `cli/`、`bin/`                                           | 用户命令及启动入口，包括状态、回答、`why`、MCP、更新与卸载              |
-| `plugins/`                                               | 内置 Agent、事件、通道和交付插件                                        |
-| `examples/recipes/`                                      | 完整场景：规则、任务 Skill 和启用说明                                   |
-| `examples/plugins/`、`examples/skills/`、`examples/*.sh` | 最小插件模板、独立任务手册和 Shell 示例                                 |
-| `skills/agent-autoloop/`                                 | 中台的正式配置与操作手册，安装时也提供给 Agent 使用                     |
-| `docs/`                                                  | 通信协议、插件开发说明与中英文架构图                                    |
-| `tests/`、`sim/`                                         | 日常行为测试，以及模拟、穷举、强杀和变异检查                            |
-| `scripts/`、`.github/workflows/`                         | 性能与真机验证、安装冒烟脚本，以及 Linux / macOS CI                     |
-| 根目录文档与 `install.sh`                                | 中英文 README、安装说明、安全边界、开发约定、许可证与安装脚本           |
+| 位置                                                     | 放什么                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `kernel/`                                                | 内核：决策、事实日志、状态投影、到期任务、规则匹配、接口行为与卡片表单                       |
+| `host/`                                                  | 运行外壳：Node HTTP、文件与 SQLite 连接、时钟、配置、后台服务和插件加载                      |
+| `protocol/`                                              | 通信格式、JSON Schema、输入校验、HTTP 客户端和一致性检查                                     |
+| `worker/`、`worker/win.ts`                               | 接单程序：领活、运行 Agent、心跳与停止、读取和提交回执；Windows 用文件和 `taskkill` 代替信号 |
+| `cli/`、`bin/`                                           | 用户命令及启动入口，包括状态、回答、`why`、MCP、更新与卸载                                   |
+| `plugins/`                                               | 内置 Agent、事件、通道和交付插件；桌面通知是 `desktop/toast.ps1`                             |
+| `examples/recipes/`                                      | 完整场景：规则、任务 Skill 和启用说明                                                        |
+| `examples/plugins/`、`examples/skills/`、`examples/*.sh` | 最小插件模板、独立任务手册和 Shell 示例                                                      |
+| `skills/agent-autoloop/`                                 | 中台的正式配置与操作手册，安装时也提供给 Agent 使用                                          |
+| `docs/`                                                  | 通信协议、插件开发说明与中英文架构图                                                         |
+| `tests/`、`sim/`                                         | 日常行为测试，以及模拟、穷举、强杀和变异检查                                                 |
+| `scripts/`、`.github/workflows/`                         | 性能与真机验证、安装冒烟脚本，以及 Linux / macOS CI                                          |
+| 根目录文档与 `install.ps1`                               | 中英文 README、安装说明、安全边界、开发约定、许可证与 Windows 安装脚本                       |
 
 读代码可以从 `bin/agent-autoloop.ts` → `cli/main.ts` 开始，再按功能进入 `host/`、`worker/` 或 `plugins/`；内核设计先看[协议](docs/protocol.md)。同名文件分属不同层：`host/http.ts` 转换 Node 请求，`kernel/http.ts` 定义接口行为；`protocol/rules.ts` 校验输入，`kernel/rules.ts` 定义规则类型和匹配。
 
