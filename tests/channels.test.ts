@@ -35,6 +35,7 @@ const base: Card = {
   answer: null,
   result: null,
   link: "https://hub.test/c/x",
+  rule: "清缓存",
 };
 
 test("a card shows its options while it's open, and what became of it after", () => {

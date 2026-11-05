@@ -207,10 +207,11 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 // Card：这张卡片现在的样子。内容创建后不变，只有状态会变
 { "id": 56, "version": 2, "ref": null, "kind": "ask", "state": "open",
   "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0,
-  "choice": null, "answer": null, "result": null, "link": null }
+  "choice": null, "answer": null, "result": null, "link": null, "rule": "…" }
 ```
 
 - `ref` 是空的就发一条新的；不是空的就把那条改成现在的样子，改不了就直接报告。
+- `rule` 是发出这张卡片的规则名，没有就是 `null`。只发一条通知、没法在通知上回答的通道（比如桌面通知）用它和卡片编号说明是哪件事。
 - 发完报告：`POST /v1/cards/56/delivered { "version": 2, "ref": "om_xxx" }`。没报告的过一分钟会再给你。**支持幂等键的平台，发新消息只用卡片编号，不带版本**。平台不支持时无法保证去重，Webhook 模板可能在报告丢失后重发。
 - 发不出去：`POST /v1/cards/56/failed { "version": 2, "error": "…" }`。第一次发送隔得越来越久地重试，一小时后放弃（卡片还开着，`agent-autoloop status` 看得到）；通道一直没来领不算在内。
 - 还没送达就已经解决的卡片不再打扰你。

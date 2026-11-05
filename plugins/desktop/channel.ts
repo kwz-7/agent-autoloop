@@ -14,11 +14,22 @@ const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with 
 const TOAST = path.join(import.meta.dirname, "toast.ps1");
 
 /**
+ * What the notification says: which card, which rule asked, the card's own words, and how to answer it. Without the number
+ * the notification only says there's something to look at, and the rule is what tells one Agent's questions from another's.
+ */
+export function spoken(card: Card) {
+  const where = card.rule ? `#${card.id} · 规则「${card.rule}」` : `#${card.id}`;
+  const lines = [where, card.title, card.text.trim()].filter((line) => line.length > 0);
+  const hint = card.kind === "ask" ? `回答：agent-autoloop answer ${card.id} <序号>` : WORDS;
+  return [...lines, hint].join("\n");
+}
+
+/**
  * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
  * it one when it starts with a dash: without it osascript takes a title of `-e` as more script to run.
  */
-export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
-  const body = `${title}\n${WORDS}`;
+export function notifyCommand(card: Card, platform: string = process.platform): [string, string[]] {
+  const body = spoken(card);
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
   // PowerShell has no arguments of its own after `-Command`, so the toast is a script file taking the two as arguments.
   // They are named because a positional body starting with `-` would be read as a parameter name and dropped.
@@ -39,8 +50,8 @@ function hasDesktop() {
 }
 
 /** Not the sync call the other channels get away with: this runs in the hub's own process, and may wait on a dialog. */
-function show(title: string) {
-  const [program, args] = notifyCommand(title);
+function show(card: Card) {
+  const [program, args] = notifyCommand(card);
   // Windows starts a `.cmd` shim through cmd and a `.js` through node, so the notifier is looked up like any other program.
   const [lead, ...prefix] = resolveProgram(program);
   return new Promise<void>((resolve, reject) => {
@@ -75,7 +86,7 @@ export default async function desktop({ hub, log, signal }: ChannelContext) {
       continue;
     }
     try {
-      await show(card.title);
+      await show(card);
       await hub.delivered(card.id, card.version, `shown-${card.id}`);
     } catch (error) {
       log(`卡片 ${card.id} 的桌面通知没发出：${error}`);

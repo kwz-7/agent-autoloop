@@ -39,8 +39,12 @@ const { loadPlugin } = await import("../host/plugins.ts");
 const { default: desktop, notifyCommand } = await import("../plugins/desktop/channel.ts");
 
 const TITLE = "Agent 问你一个问题";
-const WORDS = "运行 agent-autoloop status 查看";
-const body = (title: string) => `${title}\n${WORDS}`;
+const RULE = "清缓存";
+/** What a notification should say: the card, the rule that asked, the card's own text, and how to answer it. */
+const body = (card: { id: number; title: string; text?: string }) =>
+  [`#${card.id} · 规则「${RULE}」`, card.title, card.text ?? "", `回答：agent-autoloop answer ${card.id} <序号>`]
+    .filter((line) => line.length > 0)
+    .join("\n");
 const base: Card = {
   id: 5,
   version: 1,
@@ -55,6 +59,7 @@ const base: Card = {
   answer: null,
   result: null,
   link: null,
+  rule: RULE,
 };
 
 let fakes = 0;
@@ -126,16 +131,28 @@ async function deliver(cards: Card[]) {
 
 test("it ships as a channel, and is told apart by platform", async () => {
   assert.equal(await loadPlugin("desktop", "channel"), desktop);
-  assert.deepEqual(notifyCommand("标题", "linux"), ["notify-send", ["--", TITLE, body("标题")]]);
-  const [program, args] = notifyCommand("标题", "darwin");
+  assert.deepEqual(notifyCommand(base, "linux"), ["notify-send", ["--", TITLE, body(base)]]);
+  const [program, args] = notifyCommand(base, "darwin");
   assert.equal(program, "osascript");
-  assert.deepEqual(args.slice(args.indexOf("--")), ["--", TITLE, body("标题")]);
+  assert.deepEqual(args.slice(args.indexOf("--")), ["--", TITLE, body(base)]);
   assert.ok(args.includes("on run argv"));
-  const [windows, windowsArgs] = notifyCommand("标题", "win32");
+  const [windows, windowsArgs] = notifyCommand(base, "win32");
   assert.equal(windows, "powershell");
   assert.deepEqual(windowsArgs.slice(0, 5), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
   assert.ok(windowsArgs[5].endsWith("toast.ps1"), "the toast is a script file of its own");
-  assert.deepEqual(windowsArgs.slice(6), ["-Title", TITLE, "-Body", body("标题")]);
+  assert.deepEqual(windowsArgs.slice(6), ["-Title", TITLE, "-Body", body(base)]);
+});
+
+test("a notification without a rule, and a notice, still say how to deal with the card", async () => {
+  // A card the hub has no rule name for is still one card you can answer by number.
+  const [, unruled] = notifyCommand({ ...base, rule: null }, "linux");
+  assert.equal(unruled[unruled.length - 1], `#5\n要不要删\n占了 10 GB\n回答：agent-autoloop answer 5 <序号>`);
+  // A notice is answered by saying it's handled, not by picking an option.
+  const [, notice] = notifyCommand({ ...base, kind: "notice", options: ["已处理"] }, "linux");
+  assert.equal(
+    notice[notice.length - 1],
+    `#5 · 规则「${RULE}」\n要不要删\n占了 10 GB\n运行 agent-autoloop status 查看`,
+  );
 });
 
 /** The fixed title and the card's words, as the stand-in was given them: after `--` on macOS, named on Windows. */
@@ -150,7 +167,7 @@ test("a new card notifies once with its title; an update only reports", async ()
   const fake = standIns();
   const { reports } = await deliver([base, { ...base, version: 2, ref: "shown-5", state: "decided", choice: 1 }]);
   assert.equal(fake.calls().length, 1);
-  assert.deepEqual(shownOf(fake.calls()[0]), [TITLE, body("要不要删")]);
+  assert.deepEqual(shownOf(fake.calls()[0]), [TITLE, body(base)]);
   assert.deepEqual(reports, [
     ["delivered", 5, 1, "shown-5"],
     ["delivered", 5, 2, "shown-5"],
@@ -195,7 +212,7 @@ test("what an Agent wrote goes in as one argument after the options, and never i
   const calls = fake.calls();
   assert.equal(calls.length, hostile.length);
   calls.forEach((call, index) => {
-    assert.deepEqual(shownOf(call), [TITLE, body(hostile[index])]);
+    assert.deepEqual(shownOf(call), [TITLE, body({ id: index + 1, title: hostile[index], text: base.text })]);
     assert.deepEqual(fixedOf(call), fixedOf(calls[0]), "the notifier is started the same whatever the card says");
   });
   assert.ok(!fixedOf(calls[0]).join("\n").includes("touch"));
@@ -216,24 +233,25 @@ test(
           "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n" +
           "Write-Output $Title\nWrite-Output $Body\n",
       );
-      for (const title of hostile) {
-        const [, args] = notifyCommand(title, "win32");
+      for (const [index, title] of hostile.entries()) {
+        const [, args] = notifyCommand({ ...base, id: index + 1, title }, "win32");
         const file = args.indexOf("-File") + 1;
         const onlyPrints = [...args.slice(0, file), print, ...args.slice(file + 1)];
         const printed = execFileSync("powershell", onlyPrints, {
           encoding: "utf8",
           env: { ...process.env, PATH: realPath },
         });
-        assert.equal(printed.replaceAll("\r\n", "\n").replace(/\n$/, ""), `${TITLE}\n${body(title)}`);
+        const card = { id: index + 1, title, text: base.text };
+        assert.equal(printed.replaceAll("\r\n", "\n").replace(/\n$/, ""), `${TITLE}\n${body(card)}`);
       }
       assert.ok(!existsSync(marker));
       return;
     }
-    for (const title of hostile) {
-      const [, args] = notifyCommand(title, "darwin");
+    for (const [index, title] of hostile.entries()) {
+      const [, args] = notifyCommand({ ...base, id: index + 1, title }, "darwin");
       const onlyPrints = args.map((word) => (word.startsWith("display notification") ? "return item 2 of argv" : word));
       const printed = execFileSync("/usr/bin/osascript", onlyPrints, { encoding: "utf8" });
-      assert.equal(printed.replace(/\n$/, ""), body(title));
+      assert.equal(printed.replace(/\n$/, ""), body({ id: index + 1, title, text: base.text }));
     }
     assert.ok(!existsSync(marker));
   },

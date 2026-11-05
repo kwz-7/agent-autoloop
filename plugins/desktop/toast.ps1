@@ -8,10 +8,12 @@ $ErrorActionPreference = "Stop"
 
 # PowerShell's own app id: the shell already accepts notifications from it, and a program of ours would have to register one.
 $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-$xml = '<toast><visual><binding template="ToastGeneric"><text>{0}</text><text>{1}</text></binding></visual></toast>' -f `
-  [System.Security.SecurityElement]::Escape($Title), [System.Security.SecurityElement]::Escape($Body)
+# Each text element is a line of the toast, so the card's lines stay apart instead of running into one paragraph.
+$text = (@($Title) + @($Body -split "`r?`n") |
+    Where-Object { $_ -ne "" } |
+    ForEach-Object { '<text>' + [System.Security.SecurityElement]::Escape($_) + '</text>' }) -join ''
 
 $document = New-Object Windows.Data.Xml.Dom.XmlDocument
-$document.LoadXml($xml)
+$document.LoadXml('<toast><visual><binding template="ToastGeneric">' + $text + '</binding></visual></toast>')
 $toast = New-Object Windows.UI.Notifications.ToastNotification $document
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show($toast)
