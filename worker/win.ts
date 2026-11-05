@@ -41,14 +41,15 @@ export function aliveWindows(pid: number | undefined, beat: string, exit: string
 
 /** A process number alone is not enough; the worker only cares whether this one is still there. */
 function processExists(pid: number): boolean | null {
+  // Not `tasklist`: on a machine with endpoint protection it takes seconds, and this is asked at the start of every
+  // turn, where a blocked event loop stalls every other request the worker and the channels are making.
   try {
-    const printed = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    });
-    return printed.includes(String(pid));
-  } catch {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
     return null;
   }
 }
@@ -72,17 +73,4 @@ export function killTree(pid: number) {
   try {
     execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   } catch {}
-}
-
-/** The process number in a file is only ours if it still runs the thing we started. */
-export function runningCommand(pid: string): string {
-  try {
-    return execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    });
-  } catch {
-    return "";
-  }
 }
